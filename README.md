@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo.svg" width="92" alt="Boss AI Router Logo" />
+<img src="assets/logo.png" width="96" alt="Boss AI Router Logo" />
 
 # Boss AI Router
 
