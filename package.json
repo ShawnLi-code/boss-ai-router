@@ -1,0 +1,18 @@
+{
+  "name": "boss-ai-router",
+  "version": "0.2.0",
+  "private": false,
+  "type": "module",
+  "description": "Boss直聘 AI测试岗位风控评估、动态简历匹配与 Ego 双号分流桌面应用 (Tauri 2)",
+  "license": "MIT",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "tauri": "tauri",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.6"
+  }
+}

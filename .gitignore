@@ -1,0 +1,25 @@
+# Dependencies & build outputs
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# Local runtime database, resumes, PII & Ego scripts (NEVER commit!)
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*credentials*.json
+
+# OS & editor files
+.DS_Store
+Thumbs.db
+*.log

@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>定制附件简历预览 / PDF 导出</title>
+  <style>
+    :root {
+      --ink: #0f172a;
+      --muted: #475569;
+      --border: #cbd5e1;
+      --accent: #3730a3;
+      --bg-pill: #eef2ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #e2e8f0;
+      color: var(--ink);
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.55;
+    }
+    .toolbar {
+      max-width: 820px;
+      margin: 0 auto 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 12px 18px;
+      border-radius: 12px;
+    }
+    .toolbar button {
+      background: #6366f1;
+      color: white;
+      border: 0;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .sheet {
+      max-width: 820px;
+      min-height: 1120px;
+      margin: 0 auto;
+      background: #ffffff;
+      padding: 44px 48px;
+      box-shadow: 0 12px 40px rgba(15, 23, 42, 0.14);
+      border-radius: 6px;
+    }
+    header {
+      border-bottom: 2px solid var(--accent);
+      padding-bottom: 14px;
+      margin-bottom: 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+    }
+    h1 { margin: 0; font-size: 26px; letter-spacing: -0.02em; }
+    .meta { color: var(--muted); font-size: 13px; margin-top: 6px; }
+    .target-badge {
+      font-size: 12px;
+      color: var(--accent);
+      background: var(--bg-pill);
+      padding: 4px 10px;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+    h2 {
+      font-size: 15px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--accent);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 4px;
+      margin: 18px 0 10px;
+    }
+    .skills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .skill-pill {
+      font-size: 12px;
+      padding: 2px 9px;
+      border-radius: 4px;
+      background: #f1f5f9;
+      border: 1px solid #cbd5e1;
+    }
+    .entry { margin-bottom: 12px; }
+    .entry-head {
+      display: flex;
+      justify-content: space-between;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .entry-sub { color: var(--muted); font-size: 13px; margin-bottom: 4px; }
+    p, li { font-size: 13.5px; margin: 4px 0; white-space: pre-wrap; }
+    @media print {
+      body { background: #fff; padding: 0; }
+      .toolbar { display: none; }
+      .sheet { box-shadow: none; padding: 18mm 16mm; border-radius: 0; max-width: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <span id="hint">定制简历预览（支持浏览器直接“另存为 PDF”）</span>
+    <button type="button" onclick="window.print()">打印 / 导出 PDF</button>
+  </div>
+  <main class="sheet" id="sheet">加载中...</main>
+
+  <script type="module">
+    const params = new URLSearchParams(location.search);
+    const jobId = params.get("jobId");
+    const track = params.get("track");
+    const sheet = document.getElementById("sheet");
+
+    async function load() {
+      let job = null;
+      if (jobId) {
+        const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`);
+        if (res.ok) job = await res.json();
+      }
+      const resState = await fetch("/api/state").then((r) => r.json());
+      const effectiveTrack = track || (job?.manual_track || (job?.recommended_track?.startsWith("A") ? "A" : "B")) || "B";
+      const resume = resState.resumes.find((r) => r.track_key === effectiveTrack) || resState.resumes[0];
+      const tailored = job?.tailored_resume || {};
+      const skills = tailored.emphasized_skills?.length ? tailored.emphasized_skills : (resume?.skills || []);
+      const exps = tailored.experiences?.length ? tailored.experiences : (resume?.experiences || []);
+      const projs = tailored.projects?.length ? tailored.projects : (resume?.projects || []);
+      const edus = resume?.education || [];
+      const summary = tailored.tailored_summary || resume?.summary || "";
+
+      sheet.innerHTML = `
+        <header>
+          <div>
+            <h1>${esc(resume?.candidate_name || "候选人简历")}</h1>
+            <div class="meta">${esc(resume?.years_label || "")} · 目标方向：${esc(job?.job_title || "AI测试工程师")}</div>
+          </div>
+          ${job ? `<span class="target-badge">定制适配：${esc(job.company_name)}</span>` : ""}
+        </header>
+        <section>
+          <h2>个人优势与核心亮点</h2>
+          <p>${esc(summary)}</p>
+        </section>
+        <section>
+          <h2>核心技能矩阵</h2>
+          <div class="skills">${skills.map((s) => `<span class="skill-pill">${esc(s)}</span>`).join("")}</div>
+        </section>
+        <section>
+          <h2>工作经历</h2>
+          ${exps.length ? exps.map((e) => `
+            <div class="entry">
+              <div class="entry-head"><span>${esc(e.company || "")} · ${esc(e.role || "")}</span><span>${esc(e.period || "")}</span></div>
+              <p>${esc(e.content || "")}</p>
+            </div>
+          `).join("") : "<p>暂无结构化工作经历，请先在工作台补充或从 Boss 同步。</p>"}
+        </section>
+        <section>
+          <h2>AI / 测试项目经历</h2>
+          ${projs.length ? projs.map((p) => `
+            <div class="entry">
+              <div class="entry-head"><span>${esc(p.name || "")} · ${esc(p.role || "")}</span><span>${esc(p.period || "")}</span></div>
+              <p>${esc(p.content || "")}</p>
+            </div>
+          `).join("") : "<p>暂无项目经历。</p>"}
+        </section>
+        <section>
+          <h2>教育背景</h2>
+          ${edus.length ? edus.map((ed) => `
+            <div class="entry">
+              <div class="entry-head"><span>${esc(ed.school || "")} · ${esc(ed.major || "")} (${esc(ed.degree || "")})</span><span>${esc(ed.period || "")}</span></div>
+            </div>
+          `).join("") : "<p>请在工作台完善教育经历。</p>"}
+        </section>
+      `;
+    }
+
+    function esc(str) {
+      return String(str ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    load();
+  </script>
+</body>
+</html>
