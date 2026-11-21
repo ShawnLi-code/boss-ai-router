@@ -217,6 +217,10 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && pathname === "/api/health") {
+      return sendJson(res, 200, { ok: true, app: "boss-ai-router", version: getCurrentVersion() });
+    }
+
     if (req.method === "GET" && pathname === "/api/state") {
       return sendJson(res, 200, buildStatePayload());
     }

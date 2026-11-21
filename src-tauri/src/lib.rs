@@ -13,18 +13,29 @@ struct ServerProcess(Arc<Mutex<Option<Child>>>);
 
 fn check_our_server(port: u16) -> bool {
     let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(180)) else {
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(200)) else {
         return false;
     };
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(400)));
-    let req = format!("GET /api/state HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let req = format!("GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
     if stream.write_all(req.as_bytes()).is_err() {
         return false;
     }
+    let mut raw = Vec::with_capacity(2048);
     let mut buf = [0u8; 512];
-    let n = stream.read(&mut buf).unwrap_or(0);
-    let head = String::from_utf8_lossy(&buf[..n]);
-    head.contains("200 OK") && head.contains("tracks")
+    while raw.len() < 2048 {
+        match stream.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                raw.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&raw);
+                if text.contains("200 OK") && (text.contains("boss-ai-router") || text.contains("tracks")) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 fn find_free_port(preferred: u16) -> u16 {

@@ -4,319 +4,290 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Boss AI测试岗位风控评估与 Ego 双号分流控制台</title>
+  <title>Boss AI Router</title>
   <link rel="icon" type="image/png" href="/logo.png">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <div class="app-shell">
-    <header class="topbar">
-      <div class="brand-wrap">
-        <img src="/logo.png" alt="Boss AI Router Logo" class="brand-logo-img" width="44" height="44">
-        <div>
-          <h1 class="brand-title">Boss 直聘 · AI测试风控与双号分流台 <span id="app-version-tag" class="version-chip">v0.3.0</span></h1>
-          <p class="brand-sub">低频拟人采集 · 活跃度前置过滤 · 强制背调补查 · A/B轨动态简历改写与防撞车</p>
+  <div class="desktop-frame">
+    <!-- Left Navigation Rail -->
+    <aside class="sidebar" aria-label="主导航">
+      <div class="sidebar-brand">
+        <img src="/logo.png" alt="Boss AI Router" width="32" height="32" class="sidebar-logo">
+        <div class="sidebar-brand-text">
+          <span class="sidebar-title">Boss AI Router</span>
+          <span id="app-version-tag" class="sidebar-version">v0.4.0</span>
         </div>
       </div>
-      <div class="topbar-actions">
-        <button type="button" id="btn-check-update" class="btn btn-ghost btn-sm">检查 GitHub 更新</button>
-        <span id="worker-pill" class="status-pill status-idle">
+
+      <nav class="sidebar-nav" aria-label="工作区模块">
+        <button type="button" class="nav-item" data-view="jobs" aria-current="page">
+          <span>岗位工作台</span>
+          <span class="nav-count" id="nav-jobs-count">0</span>
+        </button>
+        <button type="button" class="nav-item" data-view="resumes">
+          <span>简历母版</span>
+        </button>
+        <button type="button" class="nav-item" data-view="funnel">
+          <span>漏斗与黑名单</span>
+        </button>
+        <button type="button" class="nav-item" data-view="settings">
+          <span>设置与更新</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-section">
+        <div class="sidebar-section-label">双号当日额度</div>
+        <div class="quota-row">
+          <span class="quota-name" id="side-a-label">A轨 · 真实日期</span>
+          <span class="quota-val" id="side-a-quota">0/25</span>
+        </div>
+        <div class="quota-row">
+          <span class="quota-name" id="side-b-label">B轨 · 绿区池</span>
+          <span class="quota-val" id="side-b-quota">0/25</span>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div id="worker-pill" class="engine-status">
           <span class="dot" aria-hidden="true"></span>
           <span id="worker-status-text">Ego 引擎空闲</span>
-        </span>
-        <button type="button" id="theme-toggle-btn" class="btn btn-ghost btn-sm" aria-label="切换明暗主题">切换明暗</button>
+        </div>
+        <div class="sidebar-footer-actions">
+          <button type="button" id="btn-check-update" class="btn-text">检查更新</button>
+          <button type="button" id="theme-toggle-btn" class="btn-text" aria-label="切换明暗主题">明暗切换</button>
+        </div>
       </div>
-    </header>
+    </aside>
 
-    <section id="update-banner" class="update-banner" hidden>
-      <div class="verify-content">
-        <strong id="update-banner-title">🚀 发现 GitHub 新版本</strong>
-        <p id="update-banner-desc">有新版本可供下载更新。</p>
-      </div>
-      <div class="verify-actions">
-        <button type="button" id="btn-open-update-modal" class="btn btn-primary btn-sm">查看更新并安装</button>
-        <button type="button" id="btn-dismiss-update-banner" class="btn btn-ghost btn-sm">稍后再说</button>
-      </div>
-    </section>
+    <!-- Main Content Surface -->
+    <main class="workspace">
+      <!-- Top Alert Strips (hidden unless active) -->
+      <section id="update-banner" class="alert-strip alert-info" hidden>
+        <div>
+          <strong id="update-banner-title">发现 GitHub 新版本</strong>
+          <span id="update-banner-desc" class="alert-desc"></span>
+        </div>
+        <div class="alert-actions">
+          <button type="button" id="btn-open-update-modal" class="btn btn-primary btn-xs">查看更新</button>
+          <button type="button" id="btn-dismiss-update-banner" class="btn btn-ghost btn-xs">忽略</button>
+        </div>
+      </section>
 
-    <section id="verify-banner" class="verify-banner" hidden>
-      <div class="verify-content">
-        <strong id="verify-title">⚠️ Boss直聘需要人工安全验证（已触发当日防封熔断）</strong>
-        <p id="verify-desc">已停止操作并把当前 Ego 标签页控制权移交给你，请在浏览器完成滑块/登录验证；为防封号建议明天再投。</p>
-      </div>
-      <div class="verify-actions">
-        <button type="button" id="verify-done-btn" class="btn btn-primary">我已处理完毕（关闭占位空间）</button>
-        <button type="button" id="verify-dismiss-btn" class="btn btn-ghost">先收起提示</button>
-      </div>
-    </section>
+      <section id="verify-banner" class="alert-strip alert-warn" hidden>
+        <div>
+          <strong id="verify-title">需要人工安全验证（已触发当日防封熔断）</strong>
+          <span id="verify-desc" class="alert-desc">请在 Ego 浏览器完成验证后释放控制权。</span>
+        </div>
+        <div class="alert-actions">
+          <button type="button" id="verify-done-btn" class="btn btn-primary btn-xs">处理完毕</button>
+          <button type="button" id="verify-dismiss-btn" class="btn btn-ghost btn-xs">收起</button>
+        </div>
+      </section>
 
-    <section class="kpi-grid" aria-label="分流概览">
-      <article class="kpi-card kpi-red">
-        <div class="kpi-label">⛔ RED 高危 · A轨真实版</div>
-        <div class="kpi-value" id="kpi-red">0</div>
-        <div class="kpi-meta" id="kpi-a-account">绑定：A轨 (Profile 2)</div>
-      </article>
-      <article class="kpi-card kpi-yellow">
-        <div class="kpi-label">⚠️ YELLOW 探底待定轨</div>
-        <div class="kpi-value" id="kpi-yellow">0</div>
-        <div class="kpi-meta">需在看板人工拍板 A/B 轨</div>
-      </article>
-      <article class="kpi-card kpi-green">
-        <div class="kpi-label">✅ GREEN 绿区 · B轨池</div>
-        <div class="kpi-value" id="kpi-green">0</div>
-        <div class="kpi-meta" id="kpi-b-account">绑定：B轨 (Profile 1)</div>
-      </article>
-      <article class="kpi-card kpi-quota">
-        <div class="kpi-label">🛡️ 今日双号安全额度</div>
-        <div class="kpi-value" id="kpi-quota">0 / 0</div>
-        <div class="kpi-meta" id="kpi-quota-detail">A轨 0/25 · B轨 0/25</div>
-      </article>
-    </section>
-
-    <nav class="tabs-shell" aria-label="主工作区切换">
-      <div class="tablist" role="tablist" aria-label="工作台视图">
-        <button type="button" role="tab" id="tab-jobs" aria-selected="true" tabindex="0">1. 岗位风控池与分流</button>
-        <button type="button" role="tab" id="tab-resumes" aria-selected="false" tabindex="-1">2. 双号简历母版与动态匹配</button>
-        <button type="button" role="tab" id="tab-settings" aria-selected="false" tabindex="-1">3. 漏斗复盘、黑名单与设置</button>
-      </div>
-    </nav>
-
-    <section id="panel-jobs" role="tabpanel" aria-labelledby="tab-jobs">
-      <div class="panel-body">
-        <div class="action-bar modern-card">
-          <div class="scrape-controls">
-            <label class="field">
-              <span>搜索关键词</span>
-              <input type="text" id="scrape-query" value="AI测试" placeholder="例如：AI测试">
-            </label>
-            <label class="field">
-              <span>城市编码</span>
-              <select id="scrape-city">
-                <option value="101280100">广州 (101280100)</option>
-                <option value="101280600">深圳 (101280600)</option>
-                <option value="101210100">杭州 (101210100)</option>
-                <option value="101010100">北京 (101010100)</option>
-                <option value="101020100">上海 (101020100)</option>
-                <option value="101270100">成都 (101270100)</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>最低 HR 活跃度</span>
-              <select id="scrape-hr-active">
-                <option value="week">本周内活跃（推荐）</option>
-                <option value="today">仅今日或刚刚活跃</option>
-                <option value="month">本月内活跃</option>
-                <option value="all">不限（不过滤）</option>
-              </select>
-            </label>
-            <label class="field field-sm">
-              <span>单次上限</span>
-              <input type="number" id="scrape-max" min="1" max="20" value="8">
-            </label>
-            <label class="field">
-              <span>采集所用 Ego 账号</span>
-              <select id="scrape-profile"></select>
-            </label>
+      <!-- VIEW 1: Master-Detail Job Workstation -->
+      <section id="view-jobs" class="view-pane">
+        <header class="toolbar">
+          <div class="toolbar-inputs">
+            <input type="text" id="scrape-query" value="AI测试" placeholder="搜索关键词" aria-label="搜索关键词" class="input-compact input-kw">
+            <select id="scrape-city" aria-label="城市" class="input-compact">
+              <option value="101280100">广州</option>
+              <option value="101280600">深圳</option>
+              <option value="101210100">杭州</option>
+              <option value="101010100">北京</option>
+              <option value="101020100">上海</option>
+              <option value="101270100">成都</option>
+            </select>
+            <select id="scrape-hr-active" aria-label="最低HR活跃度" class="input-compact">
+              <option value="week">本周内活跃</option>
+              <option value="today">仅今日活跃</option>
+              <option value="month">本月内活跃</option>
+              <option value="all">活跃度不限</option>
+            </select>
+            <input type="number" id="scrape-max" min="1" max="20" value="8" aria-label="抓取上限" class="input-compact input-num" title="单次安全上限">
+            <select id="scrape-profile" aria-label="采集所用Ego账号" class="input-compact"></select>
           </div>
-          <div class="action-buttons">
-            <button type="button" id="btn-scrape" class="btn btn-primary">低速拟人抓取 Boss 岗位并评估</button>
-            <button type="button" id="btn-open-import" class="btn btn-secondary">手动导入 / 粘贴岗位 JSON</button>
+          <div class="toolbar-actions">
+            <button type="button" id="btn-scrape" class="btn btn-primary btn-sm">低速采集并评估</button>
+            <button type="button" id="btn-open-import" class="btn btn-secondary btn-sm">导入 JSON</button>
+          </div>
+        </header>
+
+        <div class="subbar">
+          <div class="segmented" role="group" aria-label="按风控区域筛选">
+            <button type="button" class="seg-btn active" data-zone="ALL">全部 <span id="cnt-all">0</span></button>
+            <button type="button" class="seg-btn" data-zone="RED">A轨·高危 <span id="cnt-red">0</span></button>
+            <button type="button" class="seg-btn" data-zone="YELLOW">待探底 <span id="cnt-yellow">0</span></button>
+            <button type="button" class="seg-btn" data-zone="GREEN">B轨·绿区 <span id="cnt-green">0</span></button>
+            <button type="button" class="seg-btn" data-zone="SKIP">已拦截 <span id="cnt-skip">0</span></button>
+          </div>
+          <div class="live-log-inline" aria-live="polite">
+            <span id="live-log-latest">就绪 · 低速拟人间隔 4.5s–8.5s</span>
           </div>
         </div>
 
-        <div class="filter-row">
-          <div class="zone-filters" role="group" aria-label="按风控区域筛选">
-            <button type="button" class="chip active" data-zone="ALL">全部岗位</button>
-            <button type="button" class="chip" data-zone="RED">⛔ RED (A轨)</button>
-            <button type="button" class="chip" data-zone="YELLOW">⚠️ YELLOW (探底)</button>
-            <button type="button" class="chip" data-zone="GREEN">✅ GREEN (B轨)</button>
-            <button type="button" class="chip" data-zone="SKIP">🚫 SKIP (反诈/黑名单)</button>
+        <div class="split-workspace">
+          <!-- Left List -->
+          <div class="job-list-pane" id="job-list-pane" role="listbox" aria-label="岗位列表">
+            <div class="empty-state">暂无岗位，点击上方“低速采集并评估”或“导入 JSON”。</div>
           </div>
-          <div class="live-log-strip" id="live-log-strip" aria-live="polite">
-            <span class="log-tag">实时日志</span>
-            <span id="live-log-latest">系统就绪，已配置低频真人间隔（4.5s - 8.5s）、活跃度筛选与当日防封熔断。</span>
+
+          <!-- Right Inspector -->
+          <div class="job-inspector-pane" id="job-inspector-pane">
+            <div class="empty-state">在左侧选择一个岗位，查看风控拆解、背调舆情、事实锁 Diff 并执行分号投递。</div>
           </div>
         </div>
+      </section>
 
-        <div tabindex="0" role="region" aria-labelledby="jobs-table-caption" class="table-wrapper modern-card">
-          <table id="jobs-table">
-            <caption id="jobs-table-caption" class="sr-only">Boss直聘 AI测试岗位风控评估与双号分流列表</caption>
-            <thead>
-              <tr>
-                <th>公司与岗位</th>
-                <th>规模 / 融资 / 行业</th>
-                <th>招聘人 & 活跃度</th>
-                <th>风险分与区域</th>
-                <th>建议分流轨道</th>
-                <th>人岗匹配</th>
-                <th>状态与操作</th>
-              </tr>
-            </thead>
-            <tbody id="jobs-tbody">
-              <tr>
-                <td colspan="7" class="empty-cell">暂无岗位数据，点击上方“低速拟人抓取 Boss 岗位”或“手动导入岗位”开始评估。</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-
-    <section id="panel-resumes" role="tabpanel" aria-labelledby="tab-resumes" hidden>
-      <div class="panel-body">
-        <div class="resumes-toolbar">
-          <p class="muted-note">两套母版分别对应两个 Ego Boss 账号；动态改写带有“事实锁”校验，绝不篡改原始公司与工作时间线。</p>
-          <button type="button" id="btn-swap-tracks" class="btn btn-secondary">对调 A/B 轨绑定的 Ego 账号</button>
+      <!-- VIEW 2: Resumes Master -->
+      <section id="view-resumes" class="view-pane scroll-pane" hidden>
+        <div class="view-header">
+          <div>
+            <h2>双号简历母版</h2>
+            <p class="muted">A/B 轨各自从对应 Ego 账号读取在线简历；动态改写带有“事实锁”，不篡改公司与时间线。</p>
+          </div>
+          <button type="button" id="btn-swap-tracks" class="btn btn-secondary btn-sm">对调 A/B 轨 Ego 绑定</button>
         </div>
         <div class="resumes-grid" id="resumes-grid"></div>
-      </div>
-    </section>
+      </section>
 
-    <section id="panel-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
-      <div class="panel-body settings-grid">
-        <section class="modern-card card-pad">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px;">
-            <h2 style="margin:0;">A/B 轨求职漏斗对比</h2>
-            <a class="btn btn-secondary btn-sm" href="/api/export" download>导出全量 JSON</a>
-          </div>
-          <div id="funnel-cards" class="funnel-grid"></div>
-          <hr class="divider">
-          <h2 style="margin-top:0;">Ego 账号绑定、熔断保护与防封设置</h2>
-          <div id="tracks-config-list" class="stack-gap"></div>
-          <hr class="divider">
-          <form id="settings-form" class="form-grid">
-            <label class="field">
-              <span>拟人最小间隔 (ms，最低 3000)</span>
-              <input type="number" name="delay_min_ms" min="3000" max="20000" value="4500">
-            </label>
-            <label class="field">
-              <span>拟人最大间隔 (ms)</span>
-              <input type="number" name="delay_max_ms" min="4000" max="30000" value="8500">
-            </label>
-            <label class="field">
-              <span>自动触发联网背调补查</span>
-              <select name="auto_web_search">
-                <option value="true">开启（规模 >=100 或 >=A轮 时自动查）</option>
-                <option value="false">关闭（仅手点补查）</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>启动时自动检查 GitHub 更新</span>
-              <select name="auto_check_update">
-                <option value="true">开启（推荐）</option>
-                <option value="false">关闭（仅手动检查）</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>GitHub 更新源仓库</span>
-              <input type="text" name="github_repo" placeholder="ShawnLi-code/boss-ai-router">
-            </label>
-            <label class="field">
-              <span>可选 AI 润色 Base URL (OpenAI兼容)</span>
-              <input type="url" name="llm_base_url" placeholder="https://api.deepseek.com/v1（留空则用本地引擎）">
-            </label>
-            <label class="field">
-              <span>可选 AI 模型名</span>
-              <input type="text" name="llm_model" placeholder="deepseek-chat">
-            </label>
-            <label class="field">
-              <span>可选 AI API Key（仅存本地 SQLite）</span>
-              <input type="password" name="llm_api_key" placeholder="留空表示不修改或不使用">
-            </label>
-            <div class="form-actions">
-              <button type="submit" class="btn btn-primary">保存防封与引擎设置</button>
-            </div>
-          </form>
-        </section>
-
-        <section class="modern-card card-pad stack-gap">
+      <!-- VIEW 3: Funnel & Blacklist -->
+      <section id="view-funnel" class="view-pane scroll-pane" hidden>
+        <div class="view-header">
           <div>
-            <h2 style="margin-top:0;">企业避坑黑名单（自动关联主品牌防撞车）</h2>
-            <p class="muted-note">可粘贴 Boss“已屏蔽公司”或不想投递的公司（支持每行一个或逗号分隔），系统自动识别集团/分公司主体并拦截。</p>
+            <h2>转化漏斗、黑名单与投递审计</h2>
+            <p class="muted">对比 A/B 轨回复率与约面率，管理关联主体避坑黑名单与投递记录。</p>
           </div>
-          <form id="blacklist-form" class="stack-gap">
-            <textarea id="blacklist-input" rows="3" placeholder="每行一家公司名称，例如：&#10;XX外包有限公司&#10;YY培训科技"></textarea>
-            <div class="modal-footer-actions">
-              <button type="submit" class="btn btn-secondary btn-sm">加入黑名单并重扫岗位池</button>
+          <a class="btn btn-secondary btn-sm" href="/api/export" download>导出全量 JSON</a>
+        </div>
+        <div class="two-col-grid">
+          <section class="surface-box">
+            <h3>双轨漏斗统计</h3>
+            <div id="funnel-cards" class="funnel-grid"></div>
+            <hr class="hairline">
+            <h3>近期投递与防撞车审计</h3>
+            <div class="logs-list" id="delivery-logs-list">
+              <p class="muted">暂无投递记录。</p>
             </div>
-          </form>
-          <div id="blacklist-items" class="blacklist-pills"></div>
-          <hr class="divider">
-          <h2 style="margin:0;">近期投递与防撞车审计记录</h2>
-          <div class="logs-list" id="delivery-logs-list">
-            <p class="muted-note">暂无投递记录。</p>
+          </section>
+
+          <section class="surface-box">
+            <h3>企业避坑黑名单</h3>
+            <p class="muted">按主品牌归一化匹配集团/子公司，同时拦截 A/B 轨重复投递。</p>
+            <form id="blacklist-form" class="stack-sm">
+              <textarea id="blacklist-input" rows="3" placeholder="每行一家公司名称，或用逗号分隔"></textarea>
+              <div class="right-row">
+                <button type="submit" class="btn btn-secondary btn-sm">加入黑名单并重扫</button>
+              </div>
+            </form>
+            <div id="blacklist-items" class="blacklist-pills"></div>
+          </section>
+        </div>
+      </section>
+
+      <!-- VIEW 4: Settings & Updates -->
+      <section id="view-settings" class="view-pane scroll-pane" hidden>
+        <div class="view-header">
+          <div>
+            <h2>账号绑定、防封策略与 GitHub 更新</h2>
+            <p class="muted">配置 A/B 轨 Ego Profile、当日防封熔断开关、可选大模型接口与自动更新源。</p>
           </div>
-        </section>
-      </div>
-    </section>
+        </div>
+        <div class="two-col-grid">
+          <section class="surface-box">
+            <h3>Ego 账号轨道与熔断状态</h3>
+            <div id="tracks-config-list" class="stack-sm"></div>
+          </section>
+          <section class="surface-box">
+            <h3>防封、LLM 与自动更新参数</h3>
+            <form id="settings-form" class="form-grid">
+              <label class="field">
+                <span>最小拟人间隔 (ms, &ge;3000)</span>
+                <input type="number" name="delay_min_ms" min="3000" max="20000" value="4500">
+              </label>
+              <label class="field">
+                <span>最大拟人间隔 (ms)</span>
+                <input type="number" name="delay_max_ms" min="4000" max="30000" value="8500">
+              </label>
+              <label class="field">
+                <span>自动触发联网背调补查</span>
+                <select name="auto_web_search">
+                  <option value="true">开启（规模 &ge;100 或 &ge;A轮）</option>
+                  <option value="false">关闭（仅手动补查）</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>启动时自动检查 GitHub 更新</span>
+                <select name="auto_check_update">
+                  <option value="true">开启</option>
+                  <option value="false">关闭</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>GitHub 更新源仓库</span>
+                <input type="text" name="github_repo" placeholder="ShawnLi-code/boss-ai-router">
+              </label>
+              <label class="field">
+                <span>可选 AI Base URL (OpenAI兼容)</span>
+                <input type="url" name="llm_base_url" placeholder="https://api.deepseek.com/v1（可留空）">
+              </label>
+              <label class="field">
+                <span>可选 AI 模型名</span>
+                <input type="text" name="llm_model" placeholder="deepseek-chat">
+              </label>
+              <label class="field">
+                <span>可选 AI API Key（仅存本机）</span>
+                <input type="password" name="llm_api_key" placeholder="留空表示不修改">
+              </label>
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary btn-sm">保存配置</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </section>
+    </main>
   </div>
 
-  <!-- 岗位详情 / 动态改写简历 / 事实锁 Diff / 投递弹窗 -->
-  <dialog id="job-modal" closedby="any" aria-labelledby="job-modal-title">
-    <div class="modal-shell">
-      <header class="modal-head">
-        <div>
-          <h2 id="job-modal-title">岗位风控与动态投递台</h2>
-          <p id="job-modal-sub" class="muted-note"></p>
-        </div>
-        <form method="dialog">
-          <button type="submit" class="btn btn-ghost" value="close" aria-label="关闭弹窗">✕ 关闭</button>
-        </form>
-      </header>
-      <div class="modal-body-grid" id="job-modal-body"></div>
-    </div>
-  </dialog>
-
-  <!-- 手动导入单条或多条岗位 JSON 弹窗 -->
+  <!-- Import Jobs Dialog -->
   <dialog id="import-modal" closedby="any" aria-labelledby="import-modal-title">
     <div class="modal-shell modal-shell-sm">
       <header class="modal-head">
         <h2 id="import-modal-title">导入单条或多条 Boss 岗位信息</h2>
         <form method="dialog">
-          <button type="submit" class="btn btn-ghost" value="close" aria-label="关闭弹窗">✕ 关闭</button>
+          <button type="submit" class="btn btn-ghost btn-xs" value="close">关闭</button>
         </form>
       </header>
-      <form id="import-form" class="stack-gap modal-pad">
-        <p class="muted-note">支持标准 JSON 数组或单条对象（字段：<code>company_name, scale, financing, industry, recruiter_title, salary_range, jd_text</code>）。</p>
-        <textarea id="import-json-input" rows="11" placeholder='[
-  {
-    "job_title": "AI测试工程师",
-    "company_name": "示例智能科技有限公司",
-    "scale": "100-499人",
-    "financing": "A轮",
-    "industry": "人工智能",
-    "recruiter_title": "测试经理",
-    "salary_range": "15-22K",
-    "jd_text": "负责RAG大模型应用评测、Pytest接口自动化，急招，独立负责测试0到1搭建。"
-  }
-]'></textarea>
-        <div class="modal-footer-actions">
-          <button type="button" id="btn-fill-sample-jobs" class="btn btn-ghost">填入 3 条示例测试岗位</button>
-          <button type="submit" class="btn btn-primary">立即解析 + 联网背调 + 风控分流</button>
+      <form id="import-form" class="stack-sm modal-pad">
+        <p class="muted">支持 JSON 数组或单条对象（<code>company_name, scale, financing, industry, recruiter_title, salary_range, jd_text</code>）。</p>
+        <textarea id="import-json-input" rows="10" placeholder='[{"company_name":"示例科技","job_title":"AI测试工程师","scale":"100-499人","financing":"A轮","recruiter_title":"测试经理","jd_text":"负责RAG评测..."}]'></textarea>
+        <div class="right-row">
+          <button type="button" id="btn-fill-sample-jobs" class="btn btn-ghost btn-sm">填入 3 条示例</button>
+          <button type="submit" class="btn btn-primary btn-sm">解析并评估</button>
         </div>
       </form>
     </div>
   </dialog>
 
-  <!-- GitHub Release 更新检查与安装弹窗 -->
+  <!-- GitHub Release Update Dialog -->
   <dialog id="update-modal" closedby="any" aria-labelledby="update-modal-title">
     <div class="modal-shell modal-shell-sm">
       <header class="modal-head">
-        <h2 id="update-modal-title">检查并安装 GitHub 更新</h2>
+        <h2 id="update-modal-title">GitHub 更新检测</h2>
         <form method="dialog">
-          <button type="submit" class="btn btn-ghost" value="close" aria-label="关闭弹窗">✕ 关闭</button>
+          <button type="submit" class="btn btn-ghost btn-xs" value="close">关闭</button>
         </form>
       </header>
-      <div class="modal-pad stack-gap">
-        <div id="update-status-text" role="status" aria-live="polite" class="muted-note">正在检查 GitHub Releases...</div>
-        <pre id="update-notes-box" class="jd-box" hidden></pre>
-        <div id="update-progress-wrap" class="stack-gap" hidden>
-          <label for="update-progress" class="muted-note" id="update-progress-label">准备下载更新包...</label>
+      <div class="modal-pad stack-sm">
+        <div id="update-status-text" role="status" aria-live="polite" class="muted">正在检查 GitHub Releases...</div>
+        <pre id="update-notes-box" class="code-box" hidden></pre>
+        <div id="update-progress-wrap" class="stack-sm" hidden>
+          <label for="update-progress" class="muted" id="update-progress-label">准备下载更新包...</label>
           <progress id="update-progress" max="100" value="0"></progress>
         </div>
-        <div class="modal-footer-actions">
-          <a id="update-release-link" class="btn btn-ghost btn-sm" href="https://github.com/ShawnLi-code/boss-ai-router/releases" target="_blank" rel="noreferrer">在 GitHub 查看 Releases</a>
-          <button type="button" id="btn-apply-update" class="btn btn-primary btn-sm" hidden>立即下载并在应用内更新</button>
+        <div class="right-row">
+          <a id="update-release-link" class="btn btn-ghost btn-sm" href="https://github.com/ShawnLi-code/boss-ai-router/releases" target="_blank" rel="noreferrer">在 GitHub 查看</a>
+          <button type="button" id="btn-apply-update" class="btn btn-primary btn-sm" hidden>立即下载并应用更新</button>
         </div>
       </div>
     </div>
