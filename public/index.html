@@ -14,23 +14,35 @@
       <div class="brand-wrap">
         <img src="/logo.png" alt="Boss AI Router Logo" class="brand-logo-img" width="44" height="44">
         <div>
-          <h1 class="brand-title">Boss 直聘 · AI测试风控与双号分流台</h1>
-          <p class="brand-sub">低频拟人采集 · 强制背调舆情补查 · A/B轨动态简历改写与防撞车投递</p>
+          <h1 class="brand-title">Boss 直聘 · AI测试风控与双号分流台 <span id="app-version-tag" class="version-chip">v0.3.0</span></h1>
+          <p class="brand-sub">低频拟人采集 · 活跃度前置过滤 · 强制背调补查 · A/B轨动态简历改写与防撞车</p>
         </div>
       </div>
       <div class="topbar-actions">
+        <button type="button" id="btn-check-update" class="btn btn-ghost btn-sm">检查 GitHub 更新</button>
         <span id="worker-pill" class="status-pill status-idle">
           <span class="dot" aria-hidden="true"></span>
           <span id="worker-status-text">Ego 引擎空闲</span>
         </span>
-        <button type="button" id="theme-toggle-btn" class="btn btn-ghost" aria-label="切换明暗主题">切换明暗</button>
+        <button type="button" id="theme-toggle-btn" class="btn btn-ghost btn-sm" aria-label="切换明暗主题">切换明暗</button>
       </div>
     </header>
 
+    <section id="update-banner" class="update-banner" hidden>
+      <div class="verify-content">
+        <strong id="update-banner-title">🚀 发现 GitHub 新版本</strong>
+        <p id="update-banner-desc">有新版本可供下载更新。</p>
+      </div>
+      <div class="verify-actions">
+        <button type="button" id="btn-open-update-modal" class="btn btn-primary btn-sm">查看更新并安装</button>
+        <button type="button" id="btn-dismiss-update-banner" class="btn btn-ghost btn-sm">稍后再说</button>
+      </div>
+    </section>
+
     <section id="verify-banner" class="verify-banner" hidden>
       <div class="verify-content">
-        <strong id="verify-title">⚠️ Boss直聘需要人工安全验证</strong>
-        <p id="verify-desc">已停止操作并把当前 Ego 标签页控制权移交给你，请在浏览器完成滑块/登录验证。</p>
+        <strong id="verify-title">⚠️ Boss直聘需要人工安全验证（已触发当日防封熔断）</strong>
+        <p id="verify-desc">已停止操作并把当前 Ego 标签页控制权移交给你，请在浏览器完成滑块/登录验证；为防封号建议明天再投。</p>
       </div>
       <div class="verify-actions">
         <button type="button" id="verify-done-btn" class="btn btn-primary">我已处理完毕（关闭占位空间）</button>
@@ -65,7 +77,7 @@
       <div class="tablist" role="tablist" aria-label="工作台视图">
         <button type="button" role="tab" id="tab-jobs" aria-selected="true" tabindex="0">1. 岗位风控池与分流</button>
         <button type="button" role="tab" id="tab-resumes" aria-selected="false" tabindex="-1">2. 双号简历母版与动态匹配</button>
-        <button type="button" role="tab" id="tab-settings" aria-selected="false" tabindex="-1">3. 投递记录与防封设置</button>
+        <button type="button" role="tab" id="tab-settings" aria-selected="false" tabindex="-1">3. 漏斗复盘、黑名单与设置</button>
       </div>
     </nav>
 
@@ -88,8 +100,17 @@
                 <option value="101270100">成都 (101270100)</option>
               </select>
             </label>
+            <label class="field">
+              <span>最低 HR 活跃度</span>
+              <select id="scrape-hr-active">
+                <option value="week">本周内活跃（推荐）</option>
+                <option value="today">仅今日或刚刚活跃</option>
+                <option value="month">本月内活跃</option>
+                <option value="all">不限（不过滤）</option>
+              </select>
+            </label>
             <label class="field field-sm">
-              <span>单次抓取上限</span>
+              <span>单次上限</span>
               <input type="number" id="scrape-max" min="1" max="20" value="8">
             </label>
             <label class="field">
@@ -109,10 +130,11 @@
             <button type="button" class="chip" data-zone="RED">⛔ RED (A轨)</button>
             <button type="button" class="chip" data-zone="YELLOW">⚠️ YELLOW (探底)</button>
             <button type="button" class="chip" data-zone="GREEN">✅ GREEN (B轨)</button>
+            <button type="button" class="chip" data-zone="SKIP">🚫 SKIP (反诈/黑名单)</button>
           </div>
           <div class="live-log-strip" id="live-log-strip" aria-live="polite">
             <span class="log-tag">实时日志</span>
-            <span id="live-log-latest">系统就绪，已配置低频真人间隔（4.5s - 8.5s）与防撞车检查。</span>
+            <span id="live-log-latest">系统就绪，已配置低频真人间隔（4.5s - 8.5s）、活跃度筛选与当日防封熔断。</span>
           </div>
         </div>
 
@@ -123,7 +145,7 @@
               <tr>
                 <th>公司与岗位</th>
                 <th>规模 / 融资 / 行业</th>
-                <th>招聘人</th>
+                <th>招聘人 & 活跃度</th>
                 <th>风险分与区域</th>
                 <th>建议分流轨道</th>
                 <th>人岗匹配</th>
@@ -143,7 +165,7 @@
     <section id="panel-resumes" role="tabpanel" aria-labelledby="tab-resumes" hidden>
       <div class="panel-body">
         <div class="resumes-toolbar">
-          <p class="muted-note">两套母版分别对应两个 Ego Boss 账号；投递具体岗位时不会篡改原在线简历时间线，而是按 JD 动态突出项目重点、导出定制附件 PDF 并生成 120 字内话术。</p>
+          <p class="muted-note">两套母版分别对应两个 Ego Boss 账号；动态改写带有“事实锁”校验，绝不篡改原始公司与工作时间线。</p>
           <button type="button" id="btn-swap-tracks" class="btn btn-secondary">对调 A/B 轨绑定的 Ego 账号</button>
         </div>
         <div class="resumes-grid" id="resumes-grid"></div>
@@ -153,7 +175,13 @@
     <section id="panel-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
       <div class="panel-body settings-grid">
         <section class="modern-card card-pad">
-          <h2>Ego 账号轨道绑定与防封限流设置</h2>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px;">
+            <h2 style="margin:0;">A/B 轨求职漏斗对比</h2>
+            <a class="btn btn-secondary btn-sm" href="/api/export" download>导出全量 JSON</a>
+          </div>
+          <div id="funnel-cards" class="funnel-grid"></div>
+          <hr class="divider">
+          <h2 style="margin-top:0;">Ego 账号绑定、熔断保护与防封设置</h2>
           <div id="tracks-config-list" class="stack-gap"></div>
           <hr class="divider">
           <form id="settings-form" class="form-grid">
@@ -173,6 +201,17 @@
               </select>
             </label>
             <label class="field">
+              <span>启动时自动检查 GitHub 更新</span>
+              <select name="auto_check_update">
+                <option value="true">开启（推荐）</option>
+                <option value="false">关闭（仅手动检查）</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>GitHub 更新源仓库</span>
+              <input type="text" name="github_repo" placeholder="ShawnLi-code/boss-ai-router">
+            </label>
+            <label class="field">
               <span>可选 AI 润色 Base URL (OpenAI兼容)</span>
               <input type="url" name="llm_base_url" placeholder="https://api.deepseek.com/v1（留空则用本地引擎）">
             </label>
@@ -190,8 +229,20 @@
           </form>
         </section>
 
-        <section class="modern-card card-pad">
-          <h2>近期投递与防撞车审计记录</h2>
+        <section class="modern-card card-pad stack-gap">
+          <div>
+            <h2 style="margin-top:0;">企业避坑黑名单（自动关联主品牌防撞车）</h2>
+            <p class="muted-note">可粘贴 Boss“已屏蔽公司”或不想投递的公司（支持每行一个或逗号分隔），系统自动识别集团/分公司主体并拦截。</p>
+          </div>
+          <form id="blacklist-form" class="stack-gap">
+            <textarea id="blacklist-input" rows="3" placeholder="每行一家公司名称，例如：&#10;XX外包有限公司&#10;YY培训科技"></textarea>
+            <div class="modal-footer-actions">
+              <button type="submit" class="btn btn-secondary btn-sm">加入黑名单并重扫岗位池</button>
+            </div>
+          </form>
+          <div id="blacklist-items" class="blacklist-pills"></div>
+          <hr class="divider">
+          <h2 style="margin:0;">近期投递与防撞车审计记录</h2>
           <div class="logs-list" id="delivery-logs-list">
             <p class="muted-note">暂无投递记录。</p>
           </div>
@@ -200,7 +251,7 @@
     </section>
   </div>
 
-  <!-- 岗位详情 / 动态改写简历 / 分账号投递弹窗 -->
+  <!-- 岗位详情 / 动态改写简历 / 事实锁 Diff / 投递弹窗 -->
   <dialog id="job-modal" closedby="any" aria-labelledby="job-modal-title">
     <div class="modal-shell">
       <header class="modal-head">
@@ -244,6 +295,30 @@
           <button type="submit" class="btn btn-primary">立即解析 + 联网背调 + 风控分流</button>
         </div>
       </form>
+    </div>
+  </dialog>
+
+  <!-- GitHub Release 更新检查与安装弹窗 -->
+  <dialog id="update-modal" closedby="any" aria-labelledby="update-modal-title">
+    <div class="modal-shell modal-shell-sm">
+      <header class="modal-head">
+        <h2 id="update-modal-title">检查并安装 GitHub 更新</h2>
+        <form method="dialog">
+          <button type="submit" class="btn btn-ghost" value="close" aria-label="关闭弹窗">✕ 关闭</button>
+        </form>
+      </header>
+      <div class="modal-pad stack-gap">
+        <div id="update-status-text" role="status" aria-live="polite" class="muted-note">正在检查 GitHub Releases...</div>
+        <pre id="update-notes-box" class="jd-box" hidden></pre>
+        <div id="update-progress-wrap" class="stack-gap" hidden>
+          <label for="update-progress" class="muted-note" id="update-progress-label">准备下载更新包...</label>
+          <progress id="update-progress" max="100" value="0"></progress>
+        </div>
+        <div class="modal-footer-actions">
+          <a id="update-release-link" class="btn btn-ghost btn-sm" href="https://github.com/ShawnLi-code/boss-ai-router/releases" target="_blank" rel="noreferrer">在 GitHub 查看 Releases</a>
+          <button type="button" id="btn-apply-update" class="btn btn-primary btn-sm" hidden>立即下载并在应用内更新</button>
+        </div>
+      </div>
     </div>
   </dialog>
 

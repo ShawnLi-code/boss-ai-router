@@ -60,24 +60,62 @@ export function matchResumeToJob(job, resume) {
 
   const custom_greeting = buildCustomGreeting(job, resume, matched);
 
+  const tailoredResume = {
+    track_key: resume?.track_key || "B",
+    years_label: resume?.years_label || "",
+    candidate_name: resume?.candidate_name || "",
+    original_summary: resume?.summary || "",
+    tailored_summary: tailoredSummary,
+    emphasized_skills: [...new Set([...matched, ...(resume?.skills || [])])].slice(0, 12),
+    experiences: tailoredExperiences,
+    projects: tailoredProjects,
+    education: resume?.education || [],
+    gap_tips: missing.length
+      ? `当前 JD 提及但简历显式命中较弱的关键词：${missing.join("、")}（建议仅在真实做过的前提下补充）`
+      : "核心技术栈已全面覆盖 JD 关键词",
+  };
+  tailoredResume.fact_guard = factGuardCheck(resume, tailoredResume);
+
   return {
     match_score: Math.max(0, Math.min(99, matchScore)),
     matched_keywords: matched,
     missing_keywords: missing,
-    tailored_resume: {
-      track_key: resume?.track_key || "B",
-      years_label: resume?.years_label || "",
-      candidate_name: resume?.candidate_name || "",
-      tailored_summary: tailoredSummary,
-      emphasized_skills: [...new Set([...matched, ...(resume?.skills || [])])].slice(0, 12),
-      experiences: tailoredExperiences,
-      projects: tailoredProjects,
-      education: resume?.education || [],
-      gap_tips: missing.length
-        ? `当前 JD 提及但简历显式命中较弱的关键词：${missing.join("、")}（建议仅在真实做过的前提下补充）`
-        : "核心技术栈已全面覆盖 JD 关键词",
-    },
+    tailored_resume: tailoredResume,
     custom_greeting,
+  };
+}
+
+/**
+ * 事实锁校验：确保动态改写后的简历未篡改原始公司名称、工作起止日期与教育背景
+ */
+export function factGuardCheck(originalResume, tailoredResume) {
+  const issues = [];
+  const origExps = originalResume?.experiences || [];
+  const tailExps = tailoredResume?.experiences || [];
+
+  if (origExps.length !== tailExps.length) {
+    issues.push(`工作经历段数发生变化（原 ${origExps.length} 段 -> 改写后 ${tailExps.length} 段）`);
+  } else {
+    for (let i = 0; i < origExps.length; i++) {
+      if ((origExps[i].company || "") !== (tailExps[i].company || "")) {
+        issues.push(`公司名称被修改：${origExps[i].company} -> ${tailExps[i].company}`);
+      }
+      if ((origExps[i].period || "") !== (tailExps[i].period || "")) {
+        issues.push(`工作时间线被修改：${origExps[i].period} -> ${tailExps[i].period}`);
+      }
+    }
+  }
+
+  const origEdu = JSON.stringify(originalResume?.education || []);
+  const tailEdu = JSON.stringify(tailoredResume?.education || []);
+  if (origEdu !== tailEdu) {
+    issues.push("教育背景字段与母版不一致");
+  }
+
+  return {
+    passed: issues.length === 0,
+    issues,
+    checked_at: new Date().toISOString(),
   };
 }
 

@@ -10,6 +10,9 @@ export const DATA_DIR = process.env.BOSS_ROUTER_DATA_DIR
   : path.join(PROJECT_ROOT, "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
+export const PDF_DIR = path.join(DATA_DIR, "pdfs");
+fs.mkdirSync(PDF_DIR, { recursive: true });
+
 const DB_PATH = path.join(DATA_DIR, "router.db");
 export const db = new DatabaseSync(DB_PATH);
 db.exec("PRAGMA journal_mode = WAL;");
@@ -29,6 +32,8 @@ db.exec(`
     profile_name TEXT NOT NULL,
     resume_strategy TEXT NOT NULL,
     daily_limit INTEGER NOT NULL DEFAULT 25,
+    breaker_date TEXT DEFAULT '',
+    breaker_reason TEXT DEFAULT '',
     updated_at TEXT NOT NULL
   );
 
@@ -59,21 +64,32 @@ db.exec(`
     searched_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS blacklist_companies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_name TEXT NOT NULL,
+    normalized_root TEXT NOT NULL UNIQUE,
+    reason TEXT NOT NULL DEFAULT '手动拉黑',
+    created_at TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     external_id TEXT UNIQUE,
     job_title TEXT NOT NULL,
     company_name TEXT NOT NULL,
+    normalized_company TEXT NOT NULL DEFAULT '',
     scale TEXT NOT NULL DEFAULT '',
     financing TEXT NOT NULL DEFAULT '',
     industry TEXT NOT NULL DEFAULT '',
     city TEXT NOT NULL DEFAULT '',
     recruiter_title TEXT NOT NULL DEFAULT '',
     recruiter_name TEXT NOT NULL DEFAULT '',
+    recruiter_active TEXT NOT NULL DEFAULT '',
     salary_range TEXT NOT NULL DEFAULT '',
     experience_req TEXT NOT NULL DEFAULT '',
     education_req TEXT NOT NULL DEFAULT '',
     jd_text TEXT NOT NULL DEFAULT '',
+    company_intro TEXT NOT NULL DEFAULT '',
     job_url TEXT NOT NULL DEFAULT '',
     source_profile_id TEXT NOT NULL DEFAULT '',
     parsed_json TEXT NOT NULL DEFAULT '{}',
@@ -98,6 +114,7 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
     company_name TEXT NOT NULL,
+    normalized_company TEXT NOT NULL DEFAULT '',
     track_key TEXT NOT NULL,
     profile_id TEXT NOT NULL,
     action TEXT NOT NULL,
@@ -108,7 +125,41 @@ db.exec(`
   );
 `);
 
+// Schema migration for existing local router.db databases
+function ensureColumn(table, col, defSql) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!cols.includes(col)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${defSql};`);
+  }
+}
+
+ensureColumn("account_tracks", "breaker_date", "TEXT DEFAULT ''");
+ensureColumn("account_tracks", "breaker_reason", "TEXT DEFAULT ''");
+ensureColumn("jobs", "normalized_company", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("jobs", "recruiter_active", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("jobs", "company_intro", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("delivery_logs", "normalized_company", "TEXT NOT NULL DEFAULT ''");
+
 const now = () => new Date().toISOString();
+export const todayStr = () => new Date().toISOString().slice(0, 10);
+
+export function normalizeCompanyRoot(name = "") {
+  let s = String(name || "").trim();
+  s = s.replace(/[（(][^）)]*[）)]/g, "");
+  s = s.replace(/(?:北京|上海|广州|深圳|杭州|成都|南京|武汉|西安|苏州|长沙|厦门)?(?:分公司|分部|办事处)$/g, "");
+  s = s.replace(/(?:股份有限公司|有限责任公司|科技有限公司|信息技术|有限公司|科技公司|科技|集团|子公司|控股|技术|信息|网络|软件|智能|电子|数字|数据)/g, "");
+  s = s.replace(/(?:公司|北京|上海|广州|深圳|杭州|成都|南京|武汉|西安|苏州)$/g, "");
+  s = s.replace(/[\s·.\-_]/g, "").toLowerCase();
+  return s || String(name || "").trim().toLowerCase();
+}
+
+// Backfill normalized_company on existing rows cleanly
+db.prepare("SELECT id, company_name FROM jobs WHERE normalized_company = ''").all().forEach((r) => {
+  db.prepare("UPDATE jobs SET normalized_company = ? WHERE id = ?").run(normalizeCompanyRoot(r.company_name), r.id);
+});
+db.prepare("SELECT id, company_name FROM delivery_logs WHERE normalized_company = ''").all().forEach((r) => {
+  db.prepare("UPDATE delivery_logs SET normalized_company = ? WHERE id = ?").run(normalizeCompanyRoot(r.company_name), r.id);
+});
 
 function seedDefaults() {
   const existingTracks = db.prepare("SELECT COUNT(*) AS cnt FROM account_tracks").get().cnt;
@@ -159,10 +210,13 @@ function seedDefaults() {
     search_query: "AI测试",
     search_city: "101280100",
     search_city_name: "广州",
-    scrape_max_jobs: "10",
+    scrape_max_jobs: "8",
+    min_hr_active: "week",
     delay_min_ms: "4500",
     delay_max_ms: "8500",
     auto_web_search: "true",
+    auto_check_update: "true",
+    github_repo: "ShawnLi-code/boss-ai-router",
     llm_base_url: "",
     llm_model: "",
     llm_api_key: "",
@@ -199,7 +253,11 @@ export function saveSettings(partial) {
 }
 
 export function getAccountTracks() {
-  return db.prepare("SELECT * FROM account_tracks ORDER BY track_key ASC").all();
+  const today = todayStr();
+  return db.prepare("SELECT * FROM account_tracks ORDER BY track_key ASC").all().map((t) => ({
+    ...t,
+    breaker_active: t.breaker_date === today,
+  }));
 }
 
 export function updateAccountTrack(trackKey, data) {
@@ -220,6 +278,68 @@ export function updateAccountTrack(trackKey, data) {
     trackKey
   );
   return getAccountTracks();
+}
+
+export function tripProfileBreaker(profileId, reason = "触发安全验证") {
+  db.prepare(`
+    UPDATE account_tracks
+    SET breaker_date = ?, breaker_reason = ?, updated_at = ?
+    WHERE profile_id = ?
+  `).run(todayStr(), reason, now(), profileId);
+  return getAccountTracks();
+}
+
+export function clearTrackBreaker(trackKey) {
+  db.prepare(`
+    UPDATE account_tracks
+    SET breaker_date = '', breaker_reason = '', updated_at = ?
+    WHERE track_key = ?
+  `).run(now(), trackKey);
+  return getAccountTracks();
+}
+
+export function isProfileBreakerActive(profileId) {
+  const row = db.prepare("SELECT breaker_date, breaker_reason FROM account_tracks WHERE profile_id = ?").get(profileId);
+  if (!row) return null;
+  if (row.breaker_date === todayStr()) {
+    return { active: true, reason: row.breaker_reason || "今日曾触发安全验证" };
+  }
+  return null;
+}
+
+export function listBlacklist() {
+  return db.prepare("SELECT * FROM blacklist_companies ORDER BY id DESC").all();
+}
+
+export function addBlacklistCompanies(names = [], reason = "手动拉黑") {
+  const stmt = db.prepare(`
+    INSERT INTO blacklist_companies (company_name, normalized_root, reason, created_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(normalized_root) DO UPDATE SET reason = excluded.reason
+  `);
+  const ts = now();
+  let added = 0;
+  for (const raw of names) {
+    const clean = String(raw || "").trim();
+    if (!clean) continue;
+    const root = normalizeCompanyRoot(clean);
+    if (!root) continue;
+    stmt.run(clean, root, reason, ts);
+    added++;
+  }
+  return { added, items: listBlacklist() };
+}
+
+export function removeBlacklistCompany(id) {
+  db.prepare("DELETE FROM blacklist_companies WHERE id = ?").run(id);
+  return listBlacklist();
+}
+
+export function checkBlacklisted(companyName) {
+  const root = normalizeCompanyRoot(companyName);
+  if (!root) return null;
+  const rows = db.prepare("SELECT * FROM blacklist_companies").all();
+  return rows.find((r) => r.normalized_root === root || root.includes(r.normalized_root) || r.normalized_root.includes(root)) || null;
 }
 
 export function getResumes() {
@@ -332,30 +452,38 @@ export function getJob(id) {
 export function upsertJob(job) {
   const ts = now();
   const externalId = job.external_id || `${job.company_name}::${job.job_title}::${job.salary_range || ""}`;
+  const normalizedCompany = normalizeCompanyRoot(job.company_name);
   const existing = job.id
     ? db.prepare("SELECT id FROM jobs WHERE id = ?").get(job.id)
     : db.prepare("SELECT id FROM jobs WHERE external_id = ?").get(externalId);
+
   if (existing) {
     db.prepare(`
       UPDATE jobs SET
-        scale = ?, financing = ?, industry = ?, city = ?, recruiter_title = ?, recruiter_name = ?,
-        salary_range = ?, experience_req = ?, education_req = ?, jd_text = ?, job_url = ?,
+        normalized_company = ?, scale = ?, financing = ?, industry = ?, city = ?,
+        recruiter_title = ?, recruiter_name = ?, recruiter_active = ?,
+        salary_range = ?, experience_req = ?, education_req = ?, jd_text = ?, company_intro = ?, job_url = ?,
         parsed_json = ?, risk_score = ?, zone = ?, recommended_track = ?,
         assigned_profile_id = COALESCE(assigned_profile_id, ?),
         evidence_json = ?, intel_summary = ?, match_score = ?, match_json = ?,
-        tailored_resume_json = ?, custom_greeting = ?, updated_at = ?
+        tailored_resume_json = ?, custom_greeting = ?,
+        status = CASE WHEN status = 'NEW' AND ? = 'SKIP' THEN 'SKIP' ELSE status END,
+        updated_at = ?
       WHERE id = ?
     `).run(
+      normalizedCompany,
       job.scale ?? "",
       job.financing ?? "",
       job.industry ?? "",
       job.city ?? "",
       job.recruiter_title ?? "",
       job.recruiter_name ?? "",
+      job.recruiter_active ?? "",
       job.salary_range ?? "",
       job.experience_req ?? "",
       job.education_req ?? "",
       job.jd_text ?? "",
+      job.company_intro ?? "",
       job.job_url ?? "",
       JSON.stringify(job.parsed ?? {}),
       job.risk_score ?? 10,
@@ -368,35 +496,40 @@ export function upsertJob(job) {
       JSON.stringify(job.match ?? {}),
       JSON.stringify(job.tailored_resume ?? {}),
       job.custom_greeting ?? "",
+      job.zone ?? "GREEN",
       ts,
       existing.id
     );
     return getJob(existing.id);
   }
 
+  const initialStatus = job.status ?? (job.zone === "SKIP" ? "SKIP" : "NEW");
   const info = db.prepare(`
     INSERT INTO jobs (
-      external_id, job_title, company_name, scale, financing, industry, city,
-      recruiter_title, recruiter_name, salary_range, experience_req, education_req,
-      jd_text, job_url, source_profile_id, parsed_json, risk_score, zone,
+      external_id, job_title, company_name, normalized_company, scale, financing, industry, city,
+      recruiter_title, recruiter_name, recruiter_active, salary_range, experience_req, education_req,
+      jd_text, company_intro, job_url, source_profile_id, parsed_json, risk_score, zone,
       recommended_track, manual_track, assigned_profile_id, evidence_json,
       intel_summary, match_score, match_json, tailored_resume_json,
       custom_greeting, status, notes, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     externalId,
     job.job_title ?? "AI测试工程师",
     job.company_name ?? "",
+    normalizedCompany,
     job.scale ?? "",
     job.financing ?? "",
     job.industry ?? "",
     job.city ?? "",
     job.recruiter_title ?? "",
     job.recruiter_name ?? "",
+    job.recruiter_active ?? "",
     job.salary_range ?? "",
     job.experience_req ?? "",
     job.education_req ?? "",
     job.jd_text ?? "",
+    job.company_intro ?? "",
     job.job_url ?? "",
     job.source_profile_id ?? "",
     JSON.stringify(job.parsed ?? {}),
@@ -411,7 +544,7 @@ export function upsertJob(job) {
     JSON.stringify(job.match ?? {}),
     JSON.stringify(job.tailored_resume ?? {}),
     job.custom_greeting ?? "",
-    job.status ?? "NEW",
+    initialStatus,
     job.notes ?? "",
     ts,
     ts
@@ -445,11 +578,16 @@ export function updateJobRouting(id, patch) {
 }
 
 export function getCompanyDeliveryHistory(companyName) {
-  return db.prepare(`
+  const root = normalizeCompanyRoot(companyName);
+  const rows = db.prepare(`
     SELECT * FROM delivery_logs
-    WHERE company_name = ? AND status IN ('DELIVERED', 'PREPARED')
+    WHERE status IN ('DELIVERED', 'PREPARED')
     ORDER BY id DESC
-  `).all(companyName);
+  `).all();
+  return rows.filter((r) => {
+    const rRoot = r.normalized_company || normalizeCompanyRoot(r.company_name);
+    return r.company_name === companyName || (root && rRoot && (rRoot === root || rRoot.includes(root) || root.includes(rRoot)));
+  });
 }
 
 export function listDeliveryLogs(limit = 100) {
@@ -457,7 +595,7 @@ export function listDeliveryLogs(limit = 100) {
 }
 
 export function countTodayDeliveries(profileId) {
-  const todayPrefix = new Date().toISOString().slice(0, 10);
+  const todayPrefix = todayStr();
   return db.prepare(`
     SELECT COUNT(*) AS cnt FROM delivery_logs
     WHERE profile_id = ? AND status = 'DELIVERED' AND created_at LIKE ?
@@ -467,11 +605,12 @@ export function countTodayDeliveries(profileId) {
 export function addDeliveryLog(entry) {
   const ts = now();
   const info = db.prepare(`
-    INSERT INTO delivery_logs (job_id, company_name, track_key, profile_id, action, greeting_text, status, detail, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO delivery_logs (job_id, company_name, normalized_company, track_key, profile_id, action, greeting_text, status, detail, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     entry.job_id,
     entry.company_name,
+    normalizeCompanyRoot(entry.company_name),
     entry.track_key,
     entry.profile_id,
     entry.action,
@@ -481,6 +620,35 @@ export function addDeliveryLog(entry) {
     ts
   );
   return db.prepare("SELECT * FROM delivery_logs WHERE id = ?").get(info.lastInsertRowid);
+}
+
+export function getFunnelStats() {
+  const jobs = listJobs();
+  const summarize = (trackKey) => {
+    const sub = jobs.filter((j) => {
+      const eff = j.manual_track || (j.recommended_track === "A轨_真实日期版" ? "A" : j.recommended_track === "B轨_绿区池" ? "B" : null);
+      return eff === trackKey;
+    });
+    const preparedOrSent = sub.filter((j) => ["PREPARED", "DELIVERED", "REPLIED", "INTERVIEW", "REJECTED"].includes(j.status)).length;
+    const delivered = sub.filter((j) => ["DELIVERED", "REPLIED", "INTERVIEW", "REJECTED"].includes(j.status)).length;
+    const replied = sub.filter((j) => ["REPLIED", "INTERVIEW"].includes(j.status)).length;
+    const interviews = sub.filter((j) => j.status === "INTERVIEW").length;
+    return {
+      total: sub.length,
+      prepared_or_sent: preparedOrSent,
+      delivered,
+      replied,
+      interviews,
+      reply_rate: delivered > 0 ? Math.round((replied / delivered) * 100) : 0,
+      interview_rate: delivered > 0 ? Math.round((interviews / delivered) * 100) : 0,
+    };
+  };
+  return {
+    A: summarize("A"),
+    B: summarize("B"),
+    skipped: jobs.filter((j) => j.zone === "SKIP" || j.status === "SKIP").length,
+    total_jobs: jobs.length,
+  };
 }
 
 function hydrateJob(row) {

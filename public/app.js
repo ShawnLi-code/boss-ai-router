@@ -4,9 +4,25 @@ const state = {
   activeZone: "ALL",
   activeJobId: null,
   pendingVerifySpaceId: null,
+  latestUpdate: null,
 };
 
 const els = {
+  versionTag: document.getElementById("app-version-tag"),
+  btnCheckUpdate: document.getElementById("btn-check-update"),
+  updateBanner: document.getElementById("update-banner"),
+  updateBannerTitle: document.getElementById("update-banner-title"),
+  updateBannerDesc: document.getElementById("update-banner-desc"),
+  btnOpenUpdateModal: document.getElementById("btn-open-update-modal"),
+  btnDismissUpdateBanner: document.getElementById("btn-dismiss-update-banner"),
+  updateModal: document.getElementById("update-modal"),
+  updateStatusText: document.getElementById("update-status-text"),
+  updateNotesBox: document.getElementById("update-notes-box"),
+  updateProgressWrap: document.getElementById("update-progress-wrap"),
+  updateProgressLabel: document.getElementById("update-progress-label"),
+  updateProgress: document.getElementById("update-progress"),
+  updateReleaseLink: document.getElementById("update-release-link"),
+  btnApplyUpdate: document.getElementById("btn-apply-update"),
   workerPill: document.getElementById("worker-pill"),
   workerStatusText: document.getElementById("worker-status-text"),
   verifyBanner: document.getElementById("verify-banner"),
@@ -23,6 +39,7 @@ const els = {
   kpiQuotaDetail: document.getElementById("kpi-quota-detail"),
   scrapeQuery: document.getElementById("scrape-query"),
   scrapeCity: document.getElementById("scrape-city"),
+  scrapeHrActive: document.getElementById("scrape-hr-active"),
   scrapeMax: document.getElementById("scrape-max"),
   scrapeProfile: document.getElementById("scrape-profile"),
   btnScrape: document.getElementById("btn-scrape"),
@@ -31,8 +48,12 @@ const els = {
   liveLogLatest: document.getElementById("live-log-latest"),
   resumesGrid: document.getElementById("resumes-grid"),
   btnSwapTracks: document.getElementById("btn-swap-tracks"),
+  funnelCards: document.getElementById("funnel-cards"),
   tracksConfigList: document.getElementById("tracks-config-list"),
   settingsForm: document.getElementById("settings-form"),
+  blacklistForm: document.getElementById("blacklist-form"),
+  blacklistInput: document.getElementById("blacklist-input"),
+  blacklistItems: document.getElementById("blacklist-items"),
   deliveryLogsList: document.getElementById("delivery-logs-list"),
   jobModal: document.getElementById("job-modal"),
   jobModalTitle: document.getElementById("job-modal-title"),
@@ -82,12 +103,12 @@ function setWorkerBusy(busy, label = "") {
 
 function showVerifyBanner(payload) {
   state.pendingVerifySpaceId = payload.taskSpaceId || null;
-  els.verifyTitle.textContent = `⚠️ 安全验证 / 登录介入提醒（TaskSpace #${payload.taskSpaceId ?? "-"}）`;
-  els.verifyDesc.textContent = payload.message || "Boss直聘触发了安全验证或登录提示，已将 Ego 标签页控制权交给你，请处理完后点击右侧按钮关闭占位空间。";
+  els.verifyTitle.textContent = `⚠️ Boss直聘需要人工安全验证（TaskSpace #${payload.taskSpaceId ?? "-"} · 已触发当日防封熔断）`;
+  els.verifyDesc.textContent = payload.message || "Boss直聘触发了安全验证或登录提示，已移交给你处理；为防连续封号，该账号今日已触发防封熔断。";
   els.verifyBanner.hidden = false;
 }
 
-// Tabs (accessible keyboard + aria-selected)
+// Tabs
 const tabs = [...document.querySelectorAll('[role="tab"]')];
 const panels = [...document.querySelectorAll('[role="tabpanel"]')];
 
@@ -120,7 +141,7 @@ for (const tab of tabs) {
   });
 }
 
-// Light dismiss fallback for <dialog closedby="any">
+// Light dismiss fallback
 if (!("closedBy" in HTMLDialogElement.prototype)) {
   const outside = (e, dialog) => {
     const r = dialog.getBoundingClientRect();
@@ -139,7 +160,6 @@ for (const dialog of document.querySelectorAll("dialog")) {
   });
 }
 
-// Theme toggle
 els.themeToggleBtn.addEventListener("click", () => {
   const root = document.documentElement;
   const current = root.getAttribute("data-theme");
@@ -148,7 +168,6 @@ els.themeToggleBtn.addEventListener("click", () => {
   root.setAttribute("data-theme", next);
 });
 
-// Zone filters
 document.querySelectorAll(".zone-filters .chip").forEach((btn) => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".zone-filters .chip").forEach((b) => b.classList.remove("active"));
@@ -161,6 +180,7 @@ document.querySelectorAll(".zone-filters .chip").forEach((btn) => {
 async function refreshState() {
   const data = await api("/api/state");
   state.data = data;
+  if (data.version) els.versionTag.textContent = `v${data.version}`;
   setWorkerBusy(Boolean(data.activeLock), data.activeLock?.label);
   renderAll();
 }
@@ -184,7 +204,9 @@ function renderAll() {
   renderProfileSelectors();
   renderJobsTable();
   renderResumes();
+  renderFunnel();
   renderSettings();
+  renderBlacklist();
   renderDeliveryLogs();
 }
 
@@ -201,8 +223,12 @@ function renderKpis() {
   els.kpiYellow.textContent = yellowCount;
   els.kpiGreen.textContent = greenCount;
 
-  if (trackA) els.kpiAAccount.textContent = `绑定：${trackA.profile_name} (${trackA.profile_id})`;
-  if (trackB) els.kpiBAccount.textContent = `绑定：${trackB.profile_name} (${trackB.profile_id})`;
+  if (trackA) {
+    els.kpiAAccount.textContent = `绑定：${trackA.profile_name} (${trackA.profile_id})${trackA.breaker_active ? " · 🛡️已熔断" : ""}`;
+  }
+  if (trackB) {
+    els.kpiBAccount.textContent = `绑定：${trackB.profile_name} (${trackB.profile_id})${trackB.breaker_active ? " · 🛡️已熔断" : ""}`;
+  }
 
   const used = (trackA?.today_delivered || 0) + (trackB?.today_delivered || 0);
   const cap = (trackA?.daily_limit || 25) + (trackB?.daily_limit || 25);
@@ -223,8 +249,19 @@ function renderProfileSelectors() {
 function formatZoneBadge(zone) {
   if (zone === "RED") return `<span class="zone-pill zone-RED">⛔ RED</span>`;
   if (zone === "YELLOW") return `<span class="zone-pill zone-YELLOW">⚠️ YELLOW</span>`;
+  if (zone === "SKIP") return `<span class="zone-pill zone-SKIP">🚫 SKIP</span>`;
   return `<span class="zone-pill zone-GREEN">✅ GREEN</span>`;
 }
+
+const STATUS_LABELS = {
+  NEW: "待处理",
+  SKIP: "已拦截跳过",
+  PREPARED: "已预填待发",
+  DELIVERED: "已投递",
+  REPLIED: "HR已回复",
+  INTERVIEW: "已约面试",
+  REJECTED: "已婉拒/结束",
+};
 
 function renderJobsTable() {
   const jobs = (state.data?.jobs || []).filter((j) =>
@@ -242,13 +279,15 @@ function renderJobsTable() {
     .map((j) => {
       const effectiveKey = j.manual_track || (j.recommended_track === "A轨_真实日期版" ? "A" : j.recommended_track === "B轨_绿区池" ? "B" : null);
       const trackInfo = effectiveKey ? trackMap[effectiveKey] : null;
-      const trackLabel = j.manual_track
-        ? `人工定轨：${j.manual_track}轨 (${trackInfo?.profile_name || ""})`
-        : trackInfo
-          ? `${j.recommended_track} · ${trackInfo.profile_name}`
-          : "⚠️ 先探底后定轨";
+      const trackLabel = j.zone === "SKIP"
+        ? j.recommended_track
+        : j.manual_track
+          ? `人工定轨：${j.manual_track}轨 (${trackInfo?.profile_name || ""})`
+          : trackInfo
+            ? `${j.recommended_track} · ${trackInfo.profile_name}`
+            : "⚠️ 先探底后定轨";
       const hasHistory = j.company_history?.length > 0;
-      const statusText = j.status === "DELIVERED" ? "已投递" : j.status === "PREPARED" ? "已预填" : "待处理";
+      const statusText = STATUS_LABELS[j.status] || j.status;
 
       return `
         <tr>
@@ -260,14 +299,17 @@ function renderJobsTable() {
             ${esc(j.scale || "规模未知")} / ${esc(j.financing || "融资未知")}
             <span class="subline">${esc(j.industry || "行业未知")} · ${esc(j.city || "")}</span>
           </td>
-          <td>${esc(j.recruiter_title || "未注明")}</td>
+          <td>
+            ${esc(j.recruiter_title || "未注明")}
+            <span class="subline">${esc(j.recruiter_active || "活跃度未知")}</span>
+          </td>
           <td>
             ${formatZoneBadge(j.zone)}
             <span class="subline">风险分：<strong>${esc(j.risk_score)}</strong></span>
           </td>
           <td>
             <span class="track-tag">${esc(trackLabel)}</span>
-            ${hasHistory ? `<span class="subline" style="color: var(--red-text)">⚠ 同公司已有投递记录</span>` : ""}
+            ${hasHistory ? `<span class="subline" style="color: var(--red-text)">⚠ 同主体已有投递记录</span>` : ""}
           </td>
           <td>
             <strong>${esc(j.match_score)}%</strong>
@@ -276,6 +318,7 @@ function renderJobsTable() {
           <td>
             <div class="row-actions">
               <button type="button" class="btn btn-primary btn-sm" data-open-job="${j.id}">评估改写 & 投递</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-ban-company="${esc(j.company_name)}">拉黑</button>
               <span class="subline">状态：${esc(statusText)}</span>
             </div>
           </td>
@@ -286,6 +329,15 @@ function renderJobsTable() {
 
   els.jobsTbody.querySelectorAll("[data-open-job]").forEach((btn) => {
     btn.addEventListener("click", () => openJobModal(Number(btn.dataset.openJob)));
+  });
+
+  els.jobsTbody.querySelectorAll("[data-ban-company]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const name = btn.dataset.banCompany;
+      if (!confirm(`确定将「${name}」加入避坑黑名单吗？`)) return;
+      await api("/api/blacklist", { method: "POST", body: JSON.stringify({ company_name: name, reason: "列表页快速拉黑" }) });
+      await refreshState();
+    });
   });
 }
 
@@ -349,9 +401,8 @@ function renderResumes() {
         const res = await api(`/api/resumes/${key}/sync`, { method: "POST" });
         if (res.status === "VERIFICATION_REQUIRED") {
           showVerifyBanner(res);
-        } else {
-          await refreshState();
         }
+        await refreshState();
       } catch (err) {
         alert(err.message);
       } finally {
@@ -386,6 +437,23 @@ function renderResumes() {
   });
 }
 
+function renderFunnel() {
+  const f = state.data?.funnel;
+  if (!f) return;
+  const renderCard = (label, data) => `
+    <div class="funnel-card">
+      <strong>${esc(label)}</strong>
+      <div class="subline">岗位数：${esc(data.total)} · 预填/发送：${esc(data.prepared_or_sent)}</div>
+      <div class="subline">实投：${esc(data.delivered)} · HR回复：${esc(data.replied)} (${esc(data.reply_rate)}%)</div>
+      <div class="subline">约面：${esc(data.interviews)} (${esc(data.interview_rate)}%)</div>
+    </div>
+  `;
+  els.funnelCards.innerHTML =
+    renderCard("A轨_真实日期版", f.A) +
+    renderCard("B轨_绿区池", f.B) +
+    `<div class="funnel-card"><strong>反诈 / 黑名单拦截</strong><div class="subline">已跳过：${esc(f.skipped)} / ${esc(f.total_jobs)} 条</div></div>`;
+}
+
 function renderSettings() {
   const { tracks, settings } = state.data;
   const profilesList = state.egoProfiles.length
@@ -398,7 +466,7 @@ function renderSettings() {
       <div class="log-item" data-track-config="${esc(t.track_key)}">
         <div class="form-grid">
           <div class="field">
-            <span>轨道</span>
+            <span>轨道 ${t.breaker_active ? '<strong style="color:var(--red-text)">(🛡今日熔断中)</strong>' : ""}</span>
             <input type="text" value="${esc(t.track_label)}" disabled>
           </div>
           <label class="field">
@@ -416,8 +484,9 @@ function renderSettings() {
             <span>日投递上限</span>
             <input type="number" min="1" max="60" value="${esc(t.daily_limit)}" data-track-limit="${esc(t.track_key)}">
           </label>
-          <div class="field" style="justify-content:flex-end;">
+          <div class="field" style="justify-content:flex-end;flex-direction:row;align-items:flex-end;gap:6px;">
             <button type="button" class="btn btn-secondary btn-sm" data-save-track="${esc(t.track_key)}">更新绑定</button>
+            ${t.breaker_active ? `<button type="button" class="btn btn-ghost btn-sm" data-clear-breaker="${esc(t.track_key)}">解除熔断</button>` : ""}
           </div>
         </div>
       </div>
@@ -443,13 +512,47 @@ function renderSettings() {
     });
   });
 
+  els.tracksConfigList.querySelectorAll("[data-clear-breaker]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await api(`/api/tracks/${btn.dataset.clearBreaker}/clear-breaker`, { method: "POST" });
+      await refreshState();
+    });
+  });
+
   const form = els.settingsForm;
   form.delay_min_ms.value = settings.delay_min_ms || "4500";
   form.delay_max_ms.value = settings.delay_max_ms || "8500";
   form.auto_web_search.value = settings.auto_web_search || "true";
+  form.auto_check_update.value = settings.auto_check_update || "true";
+  form.github_repo.value = settings.github_repo || "ShawnLi-code/boss-ai-router";
   form.llm_base_url.value = settings.llm_base_url || "";
   form.llm_model.value = settings.llm_model || "";
   form.llm_api_key.value = settings.llm_api_key || "";
+  if (settings.min_hr_active) els.scrapeHrActive.value = settings.min_hr_active;
+}
+
+function renderBlacklist() {
+  const items = state.data?.blacklist || [];
+  if (items.length === 0) {
+    els.blacklistItems.innerHTML = `<span class="muted-note">暂无黑名单公司。</span>`;
+    return;
+  }
+  els.blacklistItems.innerHTML = items
+    .map(
+      (b) => `
+      <span class="blacklist-pill">
+        <span>${esc(b.company_name)}</span>
+        <button type="button" data-del-blacklist="${b.id}" aria-label="移除 ${esc(b.company_name)}">×</button>
+      </span>
+    `
+    )
+    .join("");
+  els.blacklistItems.querySelectorAll("[data-del-blacklist]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await api(`/api/blacklist/${btn.dataset.delBlacklist}`, { method: "DELETE" });
+      await refreshState();
+    });
+  });
 }
 
 function renderDeliveryLogs() {
@@ -479,10 +582,11 @@ async function openJobModal(jobId) {
   const conflict = (job.company_history || []).find((h) => effectiveKey && h.track_key !== effectiveKey);
 
   els.jobModalTitle.textContent = `${job.job_title} · ${job.company_name}`;
-  els.jobModalSub.textContent = `${job.salary_range || ""} | ${job.scale || "规模未知"} | ${job.financing || "融资未知"} | ${job.recruiter_title || ""}`;
+  els.jobModalSub.textContent = `${job.salary_range || ""} | ${job.scale || "规模未知"} | ${job.financing || "融资未知"} | ${job.recruiter_title || ""} (${job.recruiter_active || "活跃度未知"})`;
 
   const snippets = job.intel?.snippets || [];
   const tailored = job.tailored_resume || {};
+  const factGuard = tailored.fact_guard || { passed: true, issues: [] };
 
   els.jobModalBody.innerHTML = `
     <div class="modal-section">
@@ -490,7 +594,7 @@ async function openJobModal(jobId) {
         <h3>1. 风控评估与联网背调证据</h3>
         ${formatZoneBadge(job.zone)}
       </div>
-      <div><strong>风险总分：${esc(job.risk_score)} / 100</strong> · 系统建议：<code>${esc(job.recommended_track)}</code></div>
+      <div><strong>风险总分：${esc(job.risk_score)} / 100</strong> · 建议：<code>${esc(job.recommended_track)}</code></div>
       <ul class="evidence-list">
         ${(job.evidence || []).map((ev) => `<li>${esc(ev)}</li>`).join("")}
       </ul>
@@ -511,12 +615,17 @@ async function openJobModal(jobId) {
     </div>
 
     <div class="modal-section">
-      <h3>2. 动态简历匹配与分号投递</h3>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <h3>2. 动态简历匹配与分号投递</h3>
+        <span class="fact-badge ${factGuard.passed ? "zone-GREEN" : "zone-RED"}">
+          ${factGuard.passed ? "🔒 事实锁校验通过" : "⚠ 事实锁告警"}
+        </span>
+      </div>
       <div class="form-grid">
         <label class="field">
           <span>投递使用轨道 / Ego 账号</span>
           <select id="modal-track-select">
-            <option value="">-- 请定轨（当前为 YELLOW 待探底） --</option>
+            <option value="">-- 请定轨（当前未定轨/跳过） --</option>
             ${tracks
               .map(
                 (t) =>
@@ -525,14 +634,27 @@ async function openJobModal(jobId) {
               .join("")}
           </select>
         </label>
-        <div class="field" style="justify-content:flex-end;">
-          <button type="button" class="btn btn-secondary btn-sm" id="modal-recalc-match">按所选轨道重算匹配与话术</button>
-        </div>
+        <label class="field">
+          <span>投后沟通状态标记</span>
+          <select id="modal-status-select">
+            ${Object.entries(STATUS_LABELS)
+              .map(([k, v]) => `<option value="${esc(k)}" ${job.status === k ? "selected" : ""}>${esc(v)}</option>`)
+              .join("")}
+          </select>
+        </label>
+      </div>
+      <div>
+        <button type="button" class="btn btn-secondary btn-sm" id="modal-recalc-match">按所选轨道重算匹配、Diff 与话术</button>
       </div>
 
       ${
+        job.blacklisted
+          ? `<div class="conflict-alert">🚫 黑名单拦截：该公司已在避坑黑名单中（${esc(job.blacklisted.reason)}）。</div>`
+          : ""
+      }
+      ${
         conflict
-          ? `<div class="conflict-alert">⚠ 防撞车警告：该公司此前已用 ${esc(conflict.track_key)}轨 (${esc(conflict.profile_id)}) 投递过，禁止再用另一账号重复投递！</div>`
+          ? `<div class="conflict-alert">⚠ 防撞车警告：该公司/关联主体此前已用 ${esc(conflict.track_key)}轨 (${esc(conflict.profile_id)}) 投递过，禁止再用另一账号重复投递！</div>`
           : ""
       }
 
@@ -541,6 +663,20 @@ async function openJobModal(jobId) {
         <span class="subline">命中关键词：${esc((job.match?.matched_keywords || []).join("、") || "无")}</span>
         <span class="subline">${esc(tailored.gap_tips || "")}</span>
       </div>
+
+      <details>
+        <summary class="muted-note" style="cursor:pointer;">查看「原文优势 vs 动态优化侧重」Diff 对比</summary>
+        <div class="diff-grid" style="margin-top:8px;">
+          <div>
+            <span class="subline">母版原文：</span>
+            <div class="diff-box">${esc(tailored.original_summary || "无母版摘要")}</div>
+          </div>
+          <div>
+            <span class="subline">动态适配后：</span>
+            <div class="diff-box">${esc(tailored.tailored_summary || "")}</div>
+          </div>
+        </div>
+      </details>
 
       <label class="field">
         <span>动态微调后的简历优势侧重点（用于导出定制附件 PDF）</span>
@@ -553,10 +689,11 @@ async function openJobModal(jobId) {
       </label>
 
       <div class="modal-footer-actions">
-        <a class="btn btn-ghost btn-sm" href="/resume-print.html?jobId=${job.id}&track=${esc(effectiveKey || "B")}" target="_blank">预览 / 导出定制简历 PDF</a>
-        <button type="button" class="btn btn-secondary btn-sm" id="modal-save-patch">保存话术与定轨</button>
-        <button type="button" class="btn btn-primary btn-sm" id="modal-deliver-prefill" ${conflict ? "disabled" : ""}>在 Ego 打开对应账号并预填话术（安全推荐）</button>
-        <button type="button" class="btn btn-ghost btn-sm" id="modal-deliver-autosend" ${conflict ? "disabled" : ""}>直接自动发送</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="modal-export-pdf-file">生成真 PDF 附件并下载</button>
+        <a class="btn btn-ghost btn-sm" href="/resume-print.html?jobId=${job.id}&track=${esc(effectiveKey || "B")}" target="_blank">网页打印预览</a>
+        <button type="button" class="btn btn-secondary btn-sm" id="modal-save-patch">保存状态/话术</button>
+        <button type="button" class="btn btn-primary btn-sm" id="modal-deliver-prefill" ${conflict || job.blacklisted ? "disabled" : ""}>在 Ego 预填话术（安全推荐）</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="modal-deliver-autosend" ${conflict || job.blacklisted ? "disabled" : ""}>直接自动发送</button>
       </div>
     </div>
   `;
@@ -583,17 +720,37 @@ async function openJobModal(jobId) {
     await openJobModal(job.id);
   });
 
+  document.getElementById("modal-export-pdf-file").addEventListener("click", async () => {
+    const trackKey = document.getElementById("modal-track-select").value || effectiveKey || "B";
+    try {
+      setWorkerBusy(true, "正在渲染定制 PDF 简历...");
+      const res = await api(`/api/jobs/${job.id}/pdf`, {
+        method: "POST",
+        body: JSON.stringify({ trackKey }),
+      });
+      window.open(res.download_url, "_blank");
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setWorkerBusy(false);
+    }
+  });
+
   document.getElementById("modal-save-patch").addEventListener("click", async () => {
     const trackKey = document.getElementById("modal-track-select").value || null;
+    const status = document.getElementById("modal-status-select").value;
+    const tailoredSummary = document.getElementById("modal-tailored-summary").value.trim();
     await api(`/api/jobs/${job.id}`, {
       method: "PATCH",
       body: JSON.stringify({
         manual_track: trackKey,
+        status,
         custom_greeting: greetingEl.value.trim(),
+        tailored_resume: { ...tailored, tailored_summary: tailoredSummary },
       }),
     });
     await refreshState();
-    alert("已保存定轨与专属话术");
+    alert("已保存状态、定轨与话术");
   });
 
   const handleDeliver = async (autoSend) => {
@@ -637,6 +794,71 @@ async function openJobModal(jobId) {
   if (!els.jobModal.open) els.jobModal.showModal();
 }
 
+// GitHub Update Flow
+async function checkUpdates({ openModal = false, silent = false } = {}) {
+  if (openModal) {
+    els.updateStatusText.textContent = "正在连接 GitHub Releases 检查更新...";
+    els.updateNotesBox.hidden = true;
+    els.updateProgressWrap.hidden = true;
+    els.btnApplyUpdate.hidden = true;
+    if (!els.updateModal.open) els.updateModal.showModal();
+  }
+  try {
+    const info = await api("/api/update/check");
+    state.latestUpdate = info;
+    els.updateReleaseLink.href = info.release_url || "https://github.com/ShawnLi-code/boss-ai-router/releases";
+    if (info.has_update) {
+      els.updateBannerTitle.textContent = `🚀 发现新版本 v${info.latest_version}（当前 v${info.current_version}）`;
+      els.updateBannerDesc.textContent = info.asset
+        ? `可直接在应用内下载安装（${info.asset.name}）`
+        : "GitHub Releases 已发布新版本，点击查看详情。";
+      els.updateBanner.hidden = false;
+    }
+    if (openModal || !silent) {
+      els.updateStatusText.textContent = info.message;
+      if (info.release_notes) {
+        els.updateNotesBox.textContent = info.release_notes;
+        els.updateNotesBox.hidden = false;
+      }
+      els.btnApplyUpdate.hidden = !(info.has_update && info.asset?.download_url);
+      if (!els.updateModal.open && !silent) els.updateModal.showModal();
+    }
+  } catch (err) {
+    if (openModal) {
+      els.updateStatusText.textContent = `检查更新出错：${err.message}`;
+    }
+  }
+}
+
+els.btnCheckUpdate.addEventListener("click", () => checkUpdates({ openModal: true }));
+els.btnOpenUpdateModal.addEventListener("click", () => checkUpdates({ openModal: true }));
+els.btnDismissUpdateBanner.addEventListener("click", () => {
+  els.updateBanner.hidden = true;
+});
+
+els.btnApplyUpdate.addEventListener("click", async () => {
+  const info = state.latestUpdate;
+  if (!info?.asset?.download_url) return;
+  els.btnApplyUpdate.disabled = true;
+  els.updateProgressWrap.hidden = false;
+  els.updateProgress.value = 0;
+  els.updateProgressLabel.textContent = `正在下载 ${info.asset.name}...`;
+  els.updateStatusText.textContent = "正在下载更新包，下载完成后将自动启动安装并重启桌面端...";
+  try {
+    const res = await api("/api/update/apply", {
+      method: "POST",
+      body: JSON.stringify({
+        download_url: info.asset.download_url,
+        file_name: info.asset.name,
+      }),
+    });
+    els.updateStatusText.textContent = `✅ 更新包已准备就绪（模式：${res.mode}），应用即将重启完成安装...`;
+  } catch (err) {
+    els.updateStatusText.textContent = `更新失败：${err.message}`;
+    els.btnApplyUpdate.disabled = false;
+  }
+});
+
 // Actions
 els.btnScrape.addEventListener("click", async () => {
   try {
@@ -646,6 +868,7 @@ els.btnScrape.addEventListener("click", async () => {
       body: JSON.stringify({
         query: els.scrapeQuery.value.trim() || "AI测试",
         city: els.scrapeCity.value,
+        minHrActive: els.scrapeHrActive.value,
         maxJobs: Number(els.scrapeMax.value) || 8,
         profileId: els.scrapeProfile.value,
       }),
@@ -653,7 +876,7 @@ els.btnScrape.addEventListener("click", async () => {
     if (res.status === "VERIFICATION_REQUIRED") {
       showVerifyBanner({
         taskSpaceId: res.taskSpaceId,
-        message: `抓取触发安全验证（已保存此前抓到的 ${res.savedCount} 条岗位），请在 Ego 完成滑块验证。`,
+        message: `抓取触发安全验证（已保存此前抓到的 ${res.savedCount} 条岗位），请在 Ego 完成滑块验证；为防封号已自动触发该账号当日熔断。`,
       });
     }
     await refreshState();
@@ -682,16 +905,6 @@ els.btnFillSampleJobs.addEventListener("click", () => {
         jd_text: "银行核心AI风控问答系统测试，要求大厂背景，入职有严格背调与核薪流水。",
       },
       {
-        job_title: "AI测试工程师（RAG/Agent）",
-        company_name: "星云智算信息科技有限公司",
-        scale: "100-499人",
-        financing: "A轮",
-        industry: "企业服务",
-        recruiter_title: "HRBP",
-        salary_range: "14-20K",
-        jd_text: "负责RAG知识库检索准确率评测及Pytest接口自动化测试。",
-      },
-      {
         job_title: "AI应用测试工程师",
         company_name: "广州灵眸跃动科技有限公司",
         scale: "20-99人",
@@ -700,6 +913,16 @@ els.btnFillSampleJobs.addEventListener("click", () => {
         recruiter_title: "测试经理",
         salary_range: "12-18K",
         jd_text: "急招！独立负责测试从0到1搭建，主要做大模型Prompt评测和Playwright自动化，非外包。",
+      },
+      {
+        job_title: "AI模型测试工程师（接受小白无经验）",
+        company_name: "星途实训科技有限公司",
+        scale: "20-99人",
+        financing: "未融资",
+        industry: "教育培训",
+        recruiter_title: "HR",
+        salary_range: "15-25K",
+        jd_text: "接受小白无经验转行，岗前实训包教包会，推荐就业。",
       },
     ],
     null,
@@ -725,6 +948,15 @@ els.importForm.addEventListener("submit", async (e) => {
 
 els.btnSwapTracks.addEventListener("click", async () => {
   await api("/api/tracks/swap", { method: "POST" });
+  await refreshState();
+});
+
+els.blacklistForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = els.blacklistInput.value.trim();
+  if (!text) return;
+  await api("/api/blacklist", { method: "POST", body: JSON.stringify({ text }) });
+  els.blacklistInput.value = "";
   await refreshState();
 });
 
@@ -759,7 +991,15 @@ evt.addEventListener("log", (e) => {
 evt.addEventListener("verification", (e) => {
   showVerifyBanner(JSON.parse(e.data));
 });
+evt.addEventListener("update-progress", (e) => {
+  const p = JSON.parse(e.data);
+  els.updateProgress.value = p.percent || 0;
+  els.updateProgressLabel.textContent = `已下载 ${p.percent || 0}%`;
+});
 
-// Boot: render SQLite state immediately, load Ego profiles asynchronously
+// Boot
 await refreshState();
 loadEgoProfiles();
+if (state.data?.settings?.auto_check_update !== "false") {
+  checkUpdates({ silent: true });
+}

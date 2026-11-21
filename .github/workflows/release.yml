@@ -1,0 +1,63 @@
+name: Release Desktop App
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install dependencies and run tests
+        run: |
+          npm ci
+          npm test
+
+      - name: Build Tauri bundles & create GitHub Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: "Boss AI Router v__VERSION__"
+          releaseBody: "请下载 Windows 安装包（*-setup.exe）或直接在桌面端内点击「检查更新 / 一键更新」。"
+          releaseDraft: false
+          prerelease: false
+          args: --bundles nsis,msi
+
+      - name: Upload standalone boss-ai-router.exe to Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if (-not $tag.StartsWith("v")) {
+            $ver = (Get-Content package.json -Raw | ConvertFrom-Json).version
+            $tag = "v$ver"
+          }
+          $exe = "src-tauri\target\release\boss-ai-router.exe"
+          if (Test-Path $exe) {
+            gh release upload $tag $exe --clobber
+          }

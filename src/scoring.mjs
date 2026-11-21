@@ -145,8 +145,50 @@ export function parseJobStructure(job) {
   };
 }
 
-export function evaluateJobRisk(job, intel = null) {
+const STRICT_SCAM_KEYWORDS = [
+  "培训贷", "先交费", "收费培训", "实训费用", "转行培训", "零基础包就业", "带薪培训收", "试岗期无薪", "购买课程",
+];
+const BAIT_NO_EXP_KEYWORDS = ["接受小白", "小白可投", "无经验可", "零基础", "接受转行"];
+const BAIT_TRAINING_SIGNALS = ["包教包会", "岗前实训", "项目实训", "产教融合", "推荐就业", "人才孵化"];
+
+export function detectScamOrBait(job) {
+  const text = `${job.job_title || ""}\n${job.jd_text || ""}\n${job.company_intro || ""}`;
+  const strictHits = hasUnnegatedKeyword(text, STRICT_SCAM_KEYWORDS);
+  if (strictHits.length > 0) {
+    return { is_scam: true, reasons: strictHits };
+  }
+  const noExpHits = hasUnnegatedKeyword(text, BAIT_NO_EXP_KEYWORDS);
+  const trainHits = hasUnnegatedKeyword(text, BAIT_TRAINING_SIGNALS);
+  if (noExpHits.length > 0 && trainHits.length > 0) {
+    return { is_scam: true, reasons: [...noExpHits, ...trainHits] };
+  }
+  return { is_scam: false, reasons: [] };
+}
+
+export function evaluateJobRisk(job, intel = null, { blacklisted = null } = {}) {
   const parsed = parseJobStructure(job);
+  const scam = detectScamOrBait(job);
+
+  if (blacklisted) {
+    return {
+      parsed: { ...parsed, scam_reasons: scam.reasons, blacklisted: true },
+      risk_score: 100,
+      zone: "SKIP",
+      recommended_track: "跳过_黑名单企业",
+      evidence: [`命中黑名单拦截：${blacklisted.company_name}（${blacklisted.reason || "手动拉黑"}）`],
+    };
+  }
+
+  if (scam.is_scam) {
+    return {
+      parsed: { ...parsed, scam_reasons: scam.reasons },
+      risk_score: 95,
+      zone: "SKIP",
+      recommended_track: "跳过_疑似培训或引流",
+      evidence: [`反诈/引流闸门拦截：命中小白引流/收费实训特征（${scam.reasons.join("、")}）`],
+    };
+  }
+
   let score = 10;
   const evidence = ["基础分：10"];
 

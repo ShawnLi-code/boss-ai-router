@@ -2,14 +2,14 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{Manager, RunEvent};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-struct ServerProcess(Mutex<Option<Child>>);
+struct ServerProcess(Arc<Mutex<Option<Child>>>);
 
 fn check_our_server(port: u16) -> bool {
     let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
@@ -38,7 +38,6 @@ fn find_free_port(preferred: u16) -> u16 {
 }
 
 fn resolve_server_entry(app: &tauri::AppHandle) -> Option<(PathBuf, PathBuf, bool)> {
-    // 1. Check dev workspace relative to manifest or current working dir
     let candidates = [
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().map(|p| p.to_path_buf()),
         std::env::current_dir().ok(),
@@ -51,7 +50,6 @@ fn resolve_server_entry(app: &tauri::AppHandle) -> Option<(PathBuf, PathBuf, boo
         }
     }
 
-    // 2. Packaged app resources
     if let Ok(res_dir) = app.path().resource_dir() {
         let direct = res_dir.join("src").join("server.mjs");
         if direct.exists() {
@@ -82,6 +80,10 @@ fn spawn_node_server(app: &tauri::AppHandle) -> Result<(u16, Option<Child>), Str
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
+    if let Ok(exe_path) = std::env::current_exe() {
+        cmd.env("BOSS_ROUTER_EXE_PATH", exe_path);
+    }
+
     if is_packaged {
         if let Ok(data_base) = app.path().app_local_data_dir() {
             cmd.env("BOSS_ROUTER_DATA_DIR", data_base.join("data"));
@@ -96,7 +98,7 @@ fn spawn_node_server(app: &tauri::AppHandle) -> Result<(u16, Option<Child>), Str
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("启动 Node 24 引擎失败（请确认已安装 Node.js >= 22.5）：{e}"))?;
+        .map_err(|e| format!("启动 Node 引擎失败（请确认已安装 Node.js >= 22.5）：{e}"))?;
 
     let deadline = Instant::now() + Duration::from_secs(6);
     while Instant::now() < deadline {
@@ -115,21 +117,47 @@ fn spawn_node_server(app: &tauri::AppHandle) -> Result<(u16, Option<Child>), Str
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let shared_child = Arc::new(Mutex::new(None));
     let app = tauri::Builder::default()
-        .manage(ServerProcess(Mutex::new(None)))
-        .setup(|app| {
+        .manage(ServerProcess(shared_child.clone()))
+        .setup(move |app| {
             let handle = app.handle().clone();
+            let child_slot = shared_child.clone();
             std::thread::spawn(move || {
                 match spawn_node_server(&handle) {
                     Ok((port, maybe_child)) => {
                         if let Some(child) = maybe_child {
-                            if let Ok(mut guard) = handle.state::<ServerProcess>().0.lock() {
+                            if let Ok(mut guard) = child_slot.lock() {
                                 *guard = Some(child);
                             }
                         }
                         if let Some(win) = handle.get_webview_window("main") {
                             let target: tauri::Url = format!("http://127.0.0.1:{port}/").parse().unwrap();
                             let _ = win.navigate(target);
+                        }
+                        // Monitor for exit code 42 (self-update restart signal)
+                        loop {
+                            std::thread::sleep(Duration::from_millis(450));
+                            let mut exited_for_update = false;
+                            if let Ok(mut guard) = child_slot.lock() {
+                                if let Some(ref mut ch) = *guard {
+                                    if let Ok(Some(st)) = ch.try_wait() {
+                                        if st.code() == Some(42) {
+                                            exited_for_update = true;
+                                            *guard = None;
+                                        } else {
+                                            *guard = None;
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    break;
+                                }
+                            }
+                            if exited_for_update {
+                                handle.exit(0);
+                                break;
+                            }
                         }
                     }
                     Err(err_msg) => {

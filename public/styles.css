@@ -92,6 +92,8 @@
 
 * { box-sizing: border-box; }
 
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--bg-main);
@@ -815,8 +817,130 @@ dialog::backdrop {
   gap: 10px;
 }
 
+.version-chip {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 6px;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border-radius: 999px;
+  background: var(--accent-glow);
+  color: var(--accent);
+}
+
+.update-banner {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 20px;
+  border-radius: 14px;
+  margin-bottom: 14px;
+  background: var(--green-bg);
+  color: var(--green-text);
+  border: 1px solid currentColor;
+}
+.update-banner[hidden] { display: none; }
+
+.zone-SKIP { color: var(--text-muted); background: var(--bg-main); border-style: dashed; }
+
+.funnel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.funnel-card {
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-subtle);
+}
+
+.blacklist-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.blacklist-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  background: var(--red-bg);
+  color: var(--red-text);
+  border: 1px solid currentColor;
+}
+
+.blacklist-pill button {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-weight: 700;
+  padding: 0 2px;
+}
+
+.diff-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.diff-box {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.fact-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+/* Native <progress> styling per modern-web-guidance */
+progress {
+  appearance: none;
+  border: 0 solid;
+  overflow: clip;
+  width: 100%;
+  height: 10px;
+  --progress-bar-radius: 1e5px;
+  border-radius: var(--progress-bar-radius);
+  background: var(--bg-main);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.15);
+}
+progress::-webkit-progress-bar {
+  background: transparent;
+}
+progress::-webkit-progress-value {
+  background: var(--accent);
+  border-radius: var(--progress-bar-radius);
+  transition: inline-size 0.25s ease;
+}
+progress::-moz-progress-bar {
+  background: var(--accent);
+  border-radius: var(--progress-bar-radius);
+  transition: inline-size 0.25s ease;
+}
+
 @media (forced-colors: active) {
-  .kpi-card, .modern-card, dialog, .zone-pill, .btn {
+  .kpi-card, .modern-card, dialog, .zone-pill, .btn, progress {
     border: 1px solid CanvasText;
   }
   [role="tab"][aria-selected="true"]::after {

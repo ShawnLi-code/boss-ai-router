@@ -355,6 +355,7 @@ export async function scrapeBossJobs({
   query = "AI测试",
   city = "101280100",
   maxJobs = 8,
+  minHrActive = "week",
   minDelayMs = 4500,
   maxDelayMs = 8500,
   onLog = () => {},
@@ -365,7 +366,7 @@ export async function scrapeBossJobs({
 
   acquireLock(`抓取 Boss 岗位「${query}」(${profileId})`);
   try {
-    onLog(`启动低频真人模拟抓取：配置 ${profileId}，关键词「${query}」，上限 ${safeMax} 条，间隔 ${safeMinDelay}-${safeMaxDelay}ms`);
+    onLog(`启动低频真人模拟抓取：配置 ${profileId}，关键词「${query}」，活跃度门槛「${minHrActive}」，上限 ${safeMax} 条，间隔 ${safeMinDelay}-${safeMaxDelay}ms`);
     const searchUrl = `https://www.zhipin.com/web/geek/jobs?query=${encodeURIComponent(query)}&city=${encodeURIComponent(city)}`;
     const code = `
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -478,6 +479,7 @@ for (let idx = 0; idx < totalTarget + 6 && collected.length < totalTarget; idx++
     const salaryRange = jobInfo.salaryDesc || cardVue.salaryDesc || (detailEl?.querySelector(".job-salary")?.innerText || "").trim();
     const jdText = jobInfo.postDescription || (detailEl?.querySelector(".job-detail-body .desc")?.innerText || "").trim();
     const companyIntro = (brandComInfo.introduce || "").trim();
+    const recruiterActive = bossInfo.activeTimeDesc || (cardVue.bossOnline ? "在线" : "") || "";
     const moreHref = detailEl?.querySelector(".more-job-btn")?.getAttribute("href") || cardEl?.querySelector("a.job-name")?.getAttribute("href") || "";
     const externalId = jobInfo.encryptId || cardVue.encryptJobId || moreHref.split("?")[0] || (companyName + "::" + jobTitle);
 
@@ -491,6 +493,7 @@ for (let idx = 0; idx < totalTarget + 6 && collected.length < totalTarget; idx++
       city: jobInfo.locationName || cardVue.cityName || "",
       recruiter_title: recruiterTitle,
       recruiter_name: recruiterName,
+      recruiter_active: recruiterActive,
       salary_range: salaryRange,
       experience_req: jobInfo.experienceName || cardVue.jobExperience || "",
       education_req: jobInfo.degreeName || cardVue.jobDegree || "",
@@ -499,6 +502,22 @@ for (let idx = 0; idx < totalTarget + 6 && collected.length < totalTarget; idx++
       job_url: moreHref ? (moreHref.startsWith("http") ? moreHref : "https://www.zhipin.com" + moreHref) : location.href,
     };
   }, idx);
+
+  const activePolicy = ${JSON.stringify(minHrActive)};
+  const passesActive = (() => {
+    const act = String(item?.recruiter_active || "");
+    if (!act || activePolicy === "all") return true;
+    if (/离线|半年前|3月前|半年内|三月内|2月前/.test(act)) return false;
+    if (activePolicy === "today") return /在线|刚刚|分钟|小时|今日/.test(act);
+    if (activePolicy === "week") return /在线|刚刚|分钟|小时|今日|昨日|天内|本周|3日|7日/.test(act);
+    if (activePolicy === "month") return !/半年前|3月前|三月内|半年内/.test(act);
+    return true;
+  })();
+
+  if (item && item.company_name && item.job_title && !passesActive) {
+    console.error(\`[SKIP INACTIVE] \${item.company_name} | \${item.job_title}（HR状态：\${item.recruiter_active}）\`);
+    continue;
+  }
 
   if (item && item.company_name && item.job_title && !seenIds.has(item.external_id)) {
     seenIds.add(item.external_id);
@@ -640,6 +659,41 @@ console.log("RESULT_JSON:" + JSON.stringify({
     const { combined } = await runEgoScript("prepare-delivery", code, 90_000);
     const res = parseMarkedJson(combined);
     onLog(`📨 ${res.message} (TaskSpace #${res.taskSpaceId})`);
+    return res;
+  } finally {
+    releaseLock();
+  }
+}
+
+export async function generateResumePdfViaEgo({ renderUrl, outputPath, profileId = "Profile 1", onLog = () => {} }) {
+  acquireLock("导出定制简历 PDF");
+  try {
+    onLog("正在生成高保真矢量定制简历 PDF...");
+    const code = `
+const fs = await import("node:fs");
+const path = await import("node:path");
+const task = await taskSpace("boss-pdf-" + Date.now(), { profileId: ${JSON.stringify(profileId)} });
+const page = (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
+await page.goto(${JSON.stringify(renderUrl)}, { waitUntil: "load", timeout: 15000 });
+await page.waitForFunction(() => window.__RESUME_READY === true, undefined, { timeout: 8000 }).catch(() => {});
+await page.waitForTimeout(300);
+const pdfRes = await page.cdp("Page.printToPDF", {
+  printBackground: true,
+  preferCSSPageSize: true,
+  marginTop: 0.35,
+  marginBottom: 0.35,
+  marginLeft: 0.35,
+  marginRight: 0.35,
+});
+await task.finish({ keep: [] });
+const outFile = ${JSON.stringify(outputPath)};
+fs.mkdirSync(path.dirname(outFile), { recursive: true });
+fs.writeFileSync(outFile, Buffer.from(pdfRes.data, "base64"));
+console.log("RESULT_JSON:" + JSON.stringify({ ok: true, path: outFile, bytes: Buffer.from(pdfRes.data, "base64").length }));
+`;
+    const { combined } = await runEgoScript("export-pdf", code, 45_000);
+    const res = parseMarkedJson(combined);
+    onLog(`✅ 已导出定制 PDF 简历（${Math.round((res.bytes || 0) / 1024)} KB）`);
     return res;
   } finally {
     releaseLock();

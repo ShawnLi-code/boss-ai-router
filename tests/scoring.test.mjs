@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { evaluateJobRisk, shouldTriggerWebSearch } from "../src/scoring.mjs";
 import { analyzeSearchSnippets } from "../src/websearch.mjs";
-import { matchResumeToJob } from "../src/matcher.mjs";
+import { factGuardCheck, matchResumeToJob } from "../src/matcher.mjs";
+import { normalizeCompanyRoot } from "../src/db.mjs";
+import { compareSemver } from "../src/updater.mjs";
 
 test("RED zone: 银行/金融 + 实锤第三方背调 + HRBP 应命中 A轨_真实日期版", () => {
   const job = {
@@ -158,5 +160,60 @@ test("ASCII缩写词边界：model/product 不应误命中 OD，Data 不应误�
   assert.equal(res.zone, "GREEN");
   assert.equal(res.recommended_track, "B轨_绿区池");
 });
+
+test("反诈/引流闸门：小白无经验+岗前实训应进入 SKIP 跳过", () => {
+  const job = {
+    company_name: "星途科技有限公司",
+    scale: "20-99人",
+    financing: "未融资",
+    industry: "人工智能",
+    recruiter_title: "HR",
+    job_title: "AI测试工程师（接受小白无经验）",
+    jd_text: "零基础可投，提供岗前实训包教包会，推荐就业。",
+  };
+  const res = evaluateJobRisk(job, null);
+  assert.equal(res.zone, "SKIP");
+  assert.equal(res.recommended_track, "跳过_疑似培训或引流");
+});
+
+test("企业黑名单与归一化主体防撞车：集团/分公司命名归一", () => {
+  assert.equal(
+    normalizeCompanyRoot("软通动力信息技术（集团）股份有限公司广州分公司"),
+    normalizeCompanyRoot("软通动力科技有限公司")
+  );
+  const res = evaluateJobRisk(
+    { company_name: "某黑名单公司", scale: "20-99人", jd_text: "AI测试" },
+    null,
+    { blacklisted: { company_name: "某黑名单公司", reason: "已屏蔽" } }
+  );
+  assert.equal(res.zone, "SKIP");
+  assert.equal(res.recommended_track, "跳过_黑名单企业");
+});
+
+test("factGuardCheck 事实锁校验能放行正常改写并拦截篡改时间线", () => {
+  const orig = {
+    experiences: [{ company: "示例科技", role: "测试", period: "2024.09-2025.12", content: "测试" }],
+    education: [{ school: "示例大学", degree: "本科" }],
+  };
+  const ok = factGuardCheck(orig, {
+    experiences: [{ company: "示例科技", role: "测试", period: "2024.09-2025.12", content: "突出RAG评测" }],
+    education: [{ school: "示例大学", degree: "本科" }],
+  });
+  assert.equal(ok.passed, true);
+
+  const tampered = factGuardCheck(orig, {
+    experiences: [{ company: "示例科技", role: "测试", period: "2023.01-2025.12", content: "突出RAG评测" }],
+    education: [{ school: "示例大学", degree: "本科" }],
+  });
+  assert.equal(tampered.passed, false);
+  assert.ok(tampered.issues.length > 0);
+});
+
+test("compareSemver 版本号比对正确", () => {
+  assert.equal(compareSemver("v0.3.1", "0.3.0"), 1);
+  assert.equal(compareSemver("0.3.0", "0.3.0"), 0);
+  assert.equal(compareSemver("0.2.9", "0.3.0"), -1);
+});
+
 
 

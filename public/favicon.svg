@@ -1,71 +1,30 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" fill="none">
   <defs>
-    <radialGradient id="bgGrad" cx="35%" cy="28%" r="85%">
-      <stop offset="0%" stop-color="#1e2246"/>
-      <stop offset="55%" stop-color="#111428"/>
-      <stop offset="100%" stop-color="#090b16"/>
-    </radialGradient>
-    <linearGradient id="rimGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#a5b4fc" stop-opacity="0.45"/>
-      <stop offset="50%" stop-color="#6366f1" stop-opacity="0.16"/>
-      <stop offset="100%" stop-color="#34d399" stop-opacity="0.32"/>
+    <linearGradient id="bg" x1="120" y1="60" x2="904" y2="964" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1b1d22"/>
+      <stop offset="100%" stop-color="#0d0e11"/>
     </linearGradient>
-    <linearGradient id="shieldGrad" x1="20%" y1="10%" x2="80%" y2="95%">
-      <stop offset="0%" stop-color="#818cf8" stop-opacity="0.24"/>
-      <stop offset="100%" stop-color="#10b981" stop-opacity="0.08"/>
+    <linearGradient id="rim" x1="120" y1="60" x2="904" y2="964" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.13"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.03"/>
     </linearGradient>
-    <linearGradient id="shieldStroke" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#a5b4fc" stop-opacity="0.72"/>
-      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.45"/>
-    </linearGradient>
-    <linearGradient id="leftBranch" x1="512" y1="670" x2="320" y2="335" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#38bdf8"/>
-      <stop offset="100%" stop-color="#10b981"/>
-    </linearGradient>
-    <linearGradient id="rightBranch" x1="512" y1="670" x2="704" y2="335" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#818cf8"/>
-      <stop offset="100%" stop-color="#c084fc"/>
-    </linearGradient>
-    <filter id="softGlow" x="-25%" y="-25%" width="150%" height="150%">
-      <feGaussianBlur stdDeviation="14" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
   </defs>
 
-  <!-- Squircle Icon Backdrop -->
-  <rect x="44" y="44" width="936" height="936" rx="220" fill="url(#bgGrad)"/>
-  <rect x="48" y="48" width="928" height="928" rx="216" stroke="url(#rimGrad)" stroke-width="8"/>
+  <!-- Matte Charcoal Squircle -->
+  <rect x="48" y="48" width="928" height="928" rx="216" fill="url(#bg)"/>
+  <rect x="50" y="50" width="924" height="924" rx="214" stroke="url(#rim)" stroke-width="4"/>
 
-  <!-- Subtle Radar Rings -->
-  <circle cx="512" cy="492" r="300" stroke="#6366f1" stroke-opacity="0.14" stroke-width="4" stroke-dasharray="16 20"/>
-  <circle cx="512" cy="492" r="206" stroke="#38bdf8" stroke-opacity="0.14" stroke-width="3"/>
+  <!-- Left Spine: x=292..352 (outer), clean 40px gap to lobes at x=392 -->
+  <rect x="292" y="280" width="60" height="464" rx="26" fill="#F4F4F6"/>
 
-  <!-- Minimalist Shield Silhouette -->
-  <path d="M512 204 L748 292 C758 296 764 306 764 318 L764 500 C764 654 656 774 512 824 C368 774 260 654 260 500 L260 318 C260 306 266 296 276 292 Z"
-        fill="url(#shieldGrad)" stroke="url(#shieldStroke)" stroke-width="10" stroke-linejoin="round"/>
+  <!-- Upper Track (A-Track · Quiet Slate, outer y=280..492) -->
+  <path d="M432 309 H582 C627.3 309 664 345.7 664 391 V391 C664 430.8 631.8 463 592 463 H432 C425.4 463 420 457.6 420 451 V321 C420 314.4 425.4 309 432 309 Z"
+        stroke="#64748B" stroke-width="58" stroke-linejoin="round" fill="none"/>
 
-  <!-- Dual-Track Split Routing Paths -->
-  <g filter="url(#softGlow)" stroke-linecap="round" stroke-linejoin="round">
-    <!-- Base Trunk -->
-    <path d="M512 688 L512 560" stroke="#e2e8f0" stroke-width="34"/>
-    <!-- Left Path (B Track · Green Pool) -->
-    <path d="M512 560 C512 490 364 468 364 380" stroke="url(#leftBranch)" stroke-width="32"/>
-    <!-- Right Path (A Track · Shielded Real) -->
-    <path d="M512 560 C512 490 660 468 660 380" stroke="url(#rightBranch)" stroke-width="32"/>
-  </g>
+  <!-- Lower Track (B-Track · Crisp Ivory, outer y=532..744) -->
+  <path d="M432 561 H608 C647.8 561 680 593.2 680 633 V633 C680 678.3 643.3 715 598 715 H432 C425.4 715 420 709.6 420 703 V573 C420 566.4 425.4 561 432 561 Z"
+        stroke="#F4F4F6" stroke-width="58" stroke-linejoin="round" fill="none"/>
 
-  <!-- Routing Nodes -->
-  <circle cx="512" cy="688" r="30" fill="#f8fafc"/>
-  <circle cx="512" cy="552" r="22" fill="#e2e8f0"/>
-
-  <!-- Left Green Node -->
-  <circle cx="364" cy="368" r="46" fill="#064e3b" stroke="#34d399" stroke-width="14"/>
-  <circle cx="364" cy="368" r="16" fill="#6ee7b7"/>
-
-  <!-- Right Indigo/Violet Node -->
-  <circle cx="660" cy="368" r="46" fill="#312e81" stroke="#a78bfa" stroke-width="14"/>
-  <circle cx="660" cy="368" r="16" fill="#ddd6fe"/>
+  <!-- Restrained Active Route Indicator (Optically centered in lower window x=449..651, y=590..686) -->
+  <rect x="498" y="615" width="96" height="46" rx="23" fill="#14B8A6"/>
 </svg>
