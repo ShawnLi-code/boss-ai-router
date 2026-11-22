@@ -15,6 +15,7 @@ import {
   getCompanyIntel,
   getFunnelStats,
   getJob,
+  getPrimaryResume,
   getResumeByTrack,
   getResumes,
   getSettings,
@@ -25,13 +26,14 @@ import {
   removeBlacklistCompany,
   saveResume,
   saveSettings,
+  todayStr,
   tripProfileBreaker,
   updateAccountTrack,
   updateJobRouting,
   upsertJob,
 } from "./db.mjs";
 import { evaluateJobRisk, shouldTriggerWebSearch } from "./scoring.mjs";
-import { matchResumeToJob } from "./matcher.mjs";
+import { DEFAULT_TARGET_ROLES, matchResumeToJob } from "./matcher.mjs";
 import { searchCompaniesBatchIntel, searchCompanyBackgroundIntel } from "./websearch.mjs";
 import { isLlmConfigured, refineMatchWithLlm } from "./llm.mjs";
 import {
@@ -45,6 +47,7 @@ import {
   generateResumePdfViaEgo,
   getActiveLock,
   listEgoProfiles,
+  openBossJobPage,
   prepareBossDelivery,
   scrapeBossJobs,
   syncResumeFromBoss,
@@ -96,13 +99,14 @@ async function scoreAndStoreJob(rawJob, { runWebSearch = true, useLlm = false } 
   }
 
   const risk = evaluateJobRisk(rawJob, intel, { blacklisted });
-  const effectiveKey = risk.recommended_track === "A轨_真实日期版" ? "A" : "B";
   const assignedProfile =
-    risk.zone === "SKIP" || risk.recommended_track === "先探底后定轨"
-      ? null
-      : trackMap[effectiveKey]?.profile_id || null;
+    rawJob.assigned_profile_id ||
+    rawJob.source_profile_id ||
+    tracks.find((t) => t.track_key === "A")?.profile_id ||
+    tracks[0]?.profile_id ||
+    "Profile 1";
 
-  const resume = getResumeByTrack(effectiveKey);
+  const resume = getPrimaryResume();
   let match = matchResumeToJob({ ...rawJob, ...risk }, resume);
   if (useLlm && risk.zone !== "SKIP" && isLlmConfigured(settings)) {
     match = await refineMatchWithLlm({ ...rawJob, ...risk }, resume, match);
@@ -118,14 +122,155 @@ async function scoreAndStoreJob(rawJob, { runWebSearch = true, useLlm = false } 
     evidence: risk.evidence,
     intel_summary: intel?.summary || (trigger.required ? "待联网补查" : "无需强制补查"),
     match_score: match.match_score,
+    apply_advice: match.apply_advice,
+    matched_query: rawJob.matched_query || "",
     match: {
       matched_keywords: match.matched_keywords,
       missing_keywords: match.missing_keywords,
+      missing_must_haves: match.missing_must_haves,
+      matched_clusters: match.matched_clusters,
+      dimensions: match.dimensions,
+      apply_advice: match.apply_advice,
+      advice_label: match.advice_label,
+      advice_summary: match.advice_summary,
+      revise_suggestions: match.revise_suggestions,
+      greeting_templates: match.greeting_templates,
       used_llm: Boolean(match.used_llm),
     },
     tailored_resume: match.tailored_resume,
     custom_greeting: match.custom_greeting,
   });
+}
+
+let patrolRunning = false;
+
+function parseWatchlistKeywords(settings) {
+  try {
+    const arr = JSON.parse(settings.watchlist_keywords || "[]");
+    if (Array.isArray(arr) && arr.length > 0) return arr.map((s) => String(s).trim()).filter(Boolean);
+  } catch {}
+  return [...DEFAULT_TARGET_ROLES];
+}
+
+async function runDailyPatrol({
+  keywords = null,
+  city = null,
+  maxPerKeyword = null,
+  minHrActive = null,
+  scanMode = null,
+  profileId = null,
+} = {}) {
+  if (patrolRunning) {
+    throw new Error("每日巡检任务已在执行中，请等待当前队列完成");
+  }
+  patrolRunning = true;
+  try {
+    const settings = getSettings();
+    const tracks = getAccountTracks();
+    const targetKeywords = Array.isArray(keywords) && keywords.length > 0
+      ? keywords.map((k) => String(k).trim()).filter(Boolean)
+      : parseWatchlistKeywords(settings);
+    const targetCity = city || settings.search_city || "101280100";
+    const targetMax = Math.max(1, Math.min(12, Number(maxPerKeyword || settings.scrape_max_jobs || 5)));
+    const targetHr = minHrActive || settings.min_hr_active || "week";
+    const mode = scanMode || settings.scan_mode || "both";
+
+    const allKnownProfiles = [...new Set(tracks.map((t) => t.profile_id).filter(Boolean))];
+    let targetProfiles = mode === "both"
+      ? (allKnownProfiles.length > 0 ? allKnownProfiles : ["Profile 1", "Profile 2"])
+      : [profileId || allKnownProfiles[0] || "Profile 1"];
+
+    targetProfiles = targetProfiles.filter((pid) => {
+      const br = isProfileBreakerActive(pid);
+      if (br) {
+        logEvent(`跳过今日已熔断账号 ${pid}（${br.reason}）`, "warn");
+        return false;
+      }
+      return true;
+    });
+
+    if (targetProfiles.length === 0) {
+      throw new Error("所选 Ego 账号今日均已触发防封熔断，请先在设置页确认安全后解除熔断");
+    }
+
+    const totalSteps = targetProfiles.length * targetKeywords.length;
+    let stepIndex = 0;
+    let totalSaved = 0;
+    const touchedProfiles = [];
+
+    for (const pid of targetProfiles) {
+      touchedProfiles.push(pid);
+      for (const kw of targetKeywords) {
+        stepIndex++;
+        broadcast("patrol-progress", {
+          step: stepIndex,
+          total: totalSteps,
+          profileId: pid,
+          keyword: kw,
+          savedCount: totalSaved,
+        });
+        logEvent(`巡检进度 [${stepIndex}/${totalSteps}]：使用 ${pid} 低速扫描「${kw}」...`);
+
+        const scrapeRes = await scrapeBossJobs({
+          profileId: pid,
+          query: kw,
+          city: targetCity,
+          maxJobs: targetMax,
+          minHrActive: targetHr,
+          minDelayMs: settings.delay_min_ms ?? 4500,
+          maxDelayMs: settings.delay_max_ms ?? 8500,
+          onLog: (m) => logEvent(m),
+        });
+
+        const scrapedJobs = scrapeRes.jobs || [];
+        if (settings.auto_web_search !== "false" && scrapedJobs.length > 0) {
+          const needSearch = scrapedJobs
+            .filter((j) => j?.company_name && !checkBlacklisted(j.company_name) && shouldTriggerWebSearch(j).required)
+            .map((j) => j.company_name);
+          if (needSearch.length > 0) {
+            await searchCompaniesBatchIntel(needSearch, { profileId: pid, onLog: (m) => logEvent(m) });
+          }
+        }
+
+        for (const raw of scrapedJobs) {
+          await scoreAndStoreJob({ ...raw, source_profile_id: pid, matched_query: kw }, { runWebSearch: false });
+          totalSaved++;
+        }
+
+        if (scrapeRes.status === "VERIFICATION_REQUIRED") {
+          tripProfileBreaker(pid, `巡检「${kw}」时触发安全验证`);
+          broadcast("verification", scrapeRes);
+          saveSettings({
+            last_daily_check_date: todayStr(),
+            last_daily_check_summary: `${new Date().toLocaleString("zh-CN", { hour12: false })} · ${pid} 在「${kw}」触发验证中断，已累计保存/更新 ${totalSaved} 条`,
+          });
+          return {
+            status: "VERIFICATION_REQUIRED",
+            taskSpaceId: scrapeRes.taskSpaceId,
+            url: scrapeRes.url,
+            savedCount: totalSaved,
+            stoppedAt: { profileId: pid, keyword: kw },
+          };
+        }
+
+        if (stepIndex < totalSteps) {
+          const pauseMs = 2600 + Math.floor(Math.random() * 2000);
+          await new Promise((r) => setTimeout(r, pauseMs));
+        }
+      }
+    }
+
+    const summary = `${new Date().toLocaleString("zh-CN", { hour12: false })} · 完成 ${targetKeywords.length} 类岗位 × ${touchedProfiles.join("+")} 巡检，保存/更新 ${totalSaved} 条岗位`;
+    saveSettings({
+      last_daily_check_date: todayStr(),
+      last_daily_check_summary: summary,
+    });
+    logEvent(`✅ ${summary}`);
+    return { status: "OK", savedCount: totalSaved, summary };
+  } finally {
+    patrolRunning = false;
+    broadcast("patrol-progress", { done: true });
+  }
 }
 
 function buildStatePayload() {
@@ -156,6 +301,8 @@ function buildStatePayload() {
     logs: listDeliveryLogs(80),
     recentEvents: recentLogs,
     activeLock: getActiveLock(),
+    patrolRunning,
+    defaultWatchlist: DEFAULT_TARGET_ROLES,
   };
 }
 
@@ -353,11 +500,12 @@ const server = http.createServer(async (req, res) => {
     const resumeSyncMatch = pathname.match(/^\/api\/resumes\/([AB])\/sync$/);
     if (req.method === "POST" && resumeSyncMatch) {
       const key = resumeSyncMatch[1];
+      const body = await readBody(req).catch(() => ({}));
       const track = getAccountTracks().find((t) => t.track_key === key);
-      if (!track) return sendJson(res, 404, { error: "轨道不存在" });
-      const result = await syncResumeFromBoss(key, track.profile_id, (m) => logEvent(m));
+      const profileId = body.profileId || track?.profile_id || "Profile 2";
+      const result = await syncResumeFromBoss(key, profileId, (m) => logEvent(m));
       if (result.status === "VERIFICATION_REQUIRED") {
-        tripProfileBreaker(track.profile_id, "同步简历时触发安全验证");
+        tripProfileBreaker(profileId, "同步简历时触发安全验证");
         broadcast("verification", result);
         return sendJson(res, 202, { ...result, state: buildStatePayload() });
       }
@@ -430,7 +578,12 @@ const server = http.createServer(async (req, res) => {
 
       const savedJobs = [];
       for (const raw of scrapedJobs) {
-        savedJobs.push(await scoreAndStoreJob({ ...raw, source_profile_id: profileId }, { runWebSearch: false }));
+        savedJobs.push(
+          await scoreAndStoreJob(
+            { ...raw, source_profile_id: profileId, matched_query: body.query || settings.search_query || "AI测试" },
+            { runWebSearch: false }
+          )
+        );
       }
 
       if (scrapeRes.status === "VERIFICATION_REQUIRED") {
@@ -447,6 +600,31 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, savedCount: savedJobs.length, state: buildStatePayload() });
     }
 
+    if (req.method === "POST" && pathname === "/api/jobs/patrol") {
+      const body = await readBody(req).catch(() => ({}));
+      const resPatrol = await runDailyPatrol({
+        keywords: body.keywords,
+        city: body.city,
+        maxPerKeyword: body.maxPerKeyword,
+        minHrActive: body.minHrActive,
+        scanMode: body.scanMode,
+        profileId: body.profileId,
+      });
+      if (resPatrol.status === "VERIFICATION_REQUIRED") {
+        return sendJson(res, 202, { ...resPatrol, state: buildStatePayload() });
+      }
+      return sendJson(res, 200, { ok: true, ...resPatrol, state: buildStatePayload() });
+    }
+
+    if (req.method === "POST" && pathname === "/api/jobs/re-evaluate-all") {
+      const jobs = listJobs();
+      for (const j of jobs) {
+        await scoreAndStoreJob(j, { runWebSearch: false });
+      }
+      logEvent(`已按 2年经历主简历重新评分全部 ${jobs.length} 条已保存岗位`);
+      return sendJson(res, 200, { ok: true, count: jobs.length, state: buildStatePayload() });
+    }
+
     const intelMatch = pathname.match(/^\/api\/jobs\/(\d+)\/intel$/);
     if (req.method === "POST" && intelMatch) {
       const job = getJob(Number(intelMatch[1]));
@@ -461,9 +639,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && evalMatch) {
       const job = getJob(Number(evalMatch[1]));
       if (!job) return sendJson(res, 404, { error: "岗位不存在" });
-      const body = await readBody(req);
-      const trackKey = body.trackKey || resolveEffectiveTrackKey(job);
-      const resume = getResumeByTrack(trackKey);
+      const body = await readBody(req).catch(() => ({}));
+      const resume = getPrimaryResume(body.trackKey || null);
       const intel = getCompanyIntel(job.company_name);
       const blacklisted = checkBlacklisted(job.company_name);
       const risk = evaluateJobRisk(job, intel, { blacklisted });
@@ -471,19 +648,35 @@ const server = http.createServer(async (req, res) => {
       if (body.useLlm !== false && isLlmConfigured()) {
         match = await refineMatchWithLlm({ ...job, ...risk }, resume, match);
       }
-      const trackObj = getAccountTracks().find((t) => t.track_key === trackKey);
+      const tracks = getAccountTracks();
+      const targetProfile =
+        body.profileId ||
+        job.assigned_profile_id ||
+        tracks.find((t) => t.track_key === (body.trackKey || "A"))?.profile_id ||
+        tracks[0]?.profile_id ||
+        "Profile 1";
       const refreshed = upsertJob({
         ...job,
         manual_track: body.trackKey || job.manual_track,
-        assigned_profile_id: trackObj?.profile_id || job.assigned_profile_id,
+        assigned_profile_id: targetProfile,
         risk_score: risk.risk_score,
         zone: risk.zone,
         recommended_track: risk.recommended_track,
         evidence: risk.evidence,
         match_score: match.match_score,
+        apply_advice: match.apply_advice,
+        matched_query: job.matched_query || "",
         match: {
           matched_keywords: match.matched_keywords,
           missing_keywords: match.missing_keywords,
+          missing_must_haves: match.missing_must_haves,
+          matched_clusters: match.matched_clusters,
+          dimensions: match.dimensions,
+          apply_advice: match.apply_advice,
+          advice_label: match.advice_label,
+          advice_summary: match.advice_summary,
+          revise_suggestions: match.revise_suggestions,
+          greeting_templates: match.greeting_templates,
           used_llm: Boolean(match.used_llm),
         },
         tailored_resume: match.tailored_resume,
@@ -492,12 +685,30 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, job: refreshed, state: buildStatePayload() });
     }
 
+    const openMatch = pathname.match(/^\/api\/jobs\/(\d+)\/open$/);
+    if (req.method === "POST" && openMatch) {
+      const job = getJob(Number(openMatch[1]));
+      if (!job) return sendJson(res, 404, { error: "岗位不存在" });
+      const body = await readBody(req).catch(() => ({}));
+      const tracks = getAccountTracks();
+      const profileId = body.profileId || job.assigned_profile_id || job.source_profile_id || tracks[0]?.profile_id || "Profile 1";
+      const resOpen = await openBossJobPage({
+        profileId,
+        jobUrl: job.job_url,
+        companyName: job.company_name,
+        jobTitle: job.job_title,
+        onLog: (m) => logEvent(m),
+      });
+      return sendJson(res, 200, { ok: true, open: resOpen, state: buildStatePayload() });
+    }
+
     const pdfMatch = pathname.match(/^\/api\/jobs\/(\d+)\/pdf$/);
     if (req.method === "POST" && pdfMatch) {
       const job = getJob(Number(pdfMatch[1]));
       if (!job) return sendJson(res, 404, { error: "岗位不存在" });
-      const body = await readBody(req);
-      const trackKey = body.trackKey || resolveEffectiveTrackKey(job);
+      const body = await readBody(req).catch(() => ({}));
+      const primary = getPrimaryResume(body.trackKey || null);
+      const trackKey = primary?.track_key || "A";
       const safeCompany = job.company_name.replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 32);
       const filename = `resume-${job.id}-${trackKey}-${safeCompany}.pdf`;
       const outputPath = path.join(PDF_DIR, filename);
@@ -559,42 +770,44 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
-      const trackKey = body.trackKey || job.manual_track || (job.recommended_track === "A轨_真实日期版" ? "A" : job.recommended_track === "B轨_绿区池" ? "B" : null);
-      if (!trackKey) {
-        return sendJson(res, 400, {
-          error: "该岗位处于 YELLOW（先探底后定轨），请先在操作台手动指定使用 A轨 或 B轨 账号后再投递。",
-        });
-      }
+      const tracks = getAccountTracks();
+      const settings = getSettings();
+      const requestedProfile = body.profileId || job.assigned_profile_id || job.source_profile_id;
+      const trackObj =
+        tracks.find((t) => t.profile_id === requestedProfile) ||
+        tracks.find((t) => t.track_key === (body.trackKey || job.manual_track || settings.primary_resume_track || "A")) ||
+        tracks[0];
+      const profileId = requestedProfile || trackObj?.profile_id || "Profile 1";
+      const trackKey = trackObj?.track_key || "A";
+      const dailyLimit = trackObj?.daily_limit || 25;
+      const profileLabel = trackObj?.profile_name || profileId;
 
-      const trackObj = getAccountTracks().find((t) => t.track_key === trackKey);
-      if (!trackObj) return sendJson(res, 400, { error: "未找到对应轨道账号配置" });
-
-      const breaker = isProfileBreakerActive(trackObj.profile_id);
+      const breaker = isProfileBreakerActive(profileId);
       if (breaker && !body.overrideBreaker) {
         return sendJson(res, 429, {
-          error: `🛡️ 当日防封熔断生效中：${trackObj.profile_name} (${trackObj.profile_id}) 今日曾触发验证（${breaker.reason}），今日暂停投递！`,
+          error: `🛡️ 当日防封熔断生效中：${profileLabel} (${profileId}) 今日曾触发验证（${breaker.reason}），今日暂停跳转发送！`,
         });
       }
 
       const history = getCompanyDeliveryHistory(job.company_name);
-      const conflict = history.find((h) => h.track_key !== trackKey);
+      const conflict = history.find((h) => h.profile_id !== profileId);
       if (conflict && !body.forceCrossTrack) {
         return sendJson(res, 409, {
-          error: `防撞车拦截：公司「${job.company_name}」关联主体已于 ${conflict.created_at.slice(0, 10)} 使用 ${conflict.track_key}轨(${conflict.profile_id}) 投递过，严禁再用 ${trackKey}轨 重复投递！`,
+          error: `防撞车提醒：公司「${job.company_name}」关联主体已于 ${conflict.created_at.slice(0, 10)} 使用 ${conflict.profile_id} 沟通过，请谨慎避免多号重复投递。`,
           conflict,
         });
       }
 
-      const todayCount = countTodayDeliveries(trackObj.profile_id);
-      if (todayCount >= trackObj.daily_limit && !body.ignoreLimit) {
+      const todayCount = countTodayDeliveries(profileId);
+      if (todayCount >= dailyLimit && !body.ignoreLimit) {
         return sendJson(res, 429, {
-          error: `防封号保护：${trackObj.profile_name} (${trackObj.profile_id}) 今日已投递 ${todayCount}/${trackObj.daily_limit} 次，已达安全上限。`,
+          error: `防封号保护：${profileLabel} (${profileId}) 今日已投递 ${todayCount}/${dailyLimit} 次，已达安全上限。`,
         });
       }
 
       const greetingText = String(body.greetingText || job.custom_greeting || "").trim();
       const deliveryRes = await prepareBossDelivery({
-        profileId: trackObj.profile_id,
+        profileId,
         jobUrl: job.job_url,
         companyName: job.company_name,
         jobTitle: job.job_title,
@@ -614,7 +827,7 @@ const server = http.createServer(async (req, res) => {
         job_id: job.id,
         company_name: job.company_name,
         track_key: trackKey,
-        profile_id: trackObj.profile_id,
+        profile_id: profileId,
         action: body.autoSend ? "AUTO_SEND" : "PREFILL_HANDOFF",
         greeting_text: greetingText,
         status: logStatus,
@@ -622,14 +835,14 @@ const server = http.createServer(async (req, res) => {
       });
 
       if (deliveryRes.status === "VERIFICATION_REQUIRED") {
-        tripProfileBreaker(trackObj.profile_id, "投递沟通时触发安全验证");
+        tripProfileBreaker(profileId, "投递沟通时触发安全验证");
         broadcast("verification", deliveryRes);
         return sendJson(res, 202, { ...deliveryRes, state: buildStatePayload() });
       }
 
       updateJobRouting(job.id, {
         manual_track: trackKey,
-        assigned_profile_id: trackObj.profile_id,
+        assigned_profile_id: profileId,
         custom_greeting: greetingText,
         status: deliveryRes.status === "SENT" ? "DELIVERED" : "PREPARED",
       });
@@ -659,6 +872,24 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, code, { error: err.message || "Internal server error" });
   }
 });
+
+// 应用内每日定时自动巡检调度器（每 60 秒检测一次）
+setInterval(() => {
+  try {
+    const settings = getSettings();
+    if (settings.daily_check_enabled !== "true") return;
+    const today = todayStr();
+    if (settings.last_daily_check_date === today) return;
+    if (patrolRunning || getActiveLock()) return;
+    const targetHHMM = settings.daily_check_time || "09:30";
+    const nowLocal = new Date();
+    const hhmm = `${String(nowLocal.getHours()).padStart(2, "0")}:${String(nowLocal.getMinutes()).padStart(2, "0")}`;
+    if (hhmm >= targetHHMM) {
+      logEvent(`触发今日定时巡检（计划时间 ${targetHHMM}）...`);
+      runDailyPatrol().catch((err) => logEvent(`自动巡检暂停：${err.message}`, "warn"));
+    }
+  } catch {}
+}, 60_000).unref();
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Boss AI Router v${getCurrentVersion()} running at http://127.0.0.1:${PORT}`);

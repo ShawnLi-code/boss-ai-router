@@ -103,6 +103,8 @@ db.exec(`
     match_score INTEGER NOT NULL DEFAULT 0,
     match_json TEXT NOT NULL DEFAULT '{}',
     tailored_resume_json TEXT NOT NULL DEFAULT '{}',
+    matched_query TEXT NOT NULL DEFAULT '',
+    apply_advice TEXT NOT NULL DEFAULT 'REVISE_FIRST',
     custom_greeting TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'NEW',
     notes TEXT NOT NULL DEFAULT '',
@@ -138,6 +140,8 @@ ensureColumn("account_tracks", "breaker_reason", "TEXT DEFAULT ''");
 ensureColumn("jobs", "normalized_company", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("jobs", "recruiter_active", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("jobs", "company_intro", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("jobs", "matched_query", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("jobs", "apply_advice", "TEXT NOT NULL DEFAULT 'REVISE_FIRST'");
 ensureColumn("delivery_logs", "normalized_company", "TEXT NOT NULL DEFAULT ''");
 
 const now = () => new Date().toISOString();
@@ -210,7 +214,7 @@ function seedDefaults() {
     search_query: "AI测试",
     search_city: "101280100",
     search_city_name: "广州",
-    scrape_max_jobs: "8",
+    scrape_max_jobs: "5",
     min_hr_active: "week",
     delay_min_ms: "4500",
     delay_max_ms: "8500",
@@ -220,6 +224,23 @@ function seedDefaults() {
     llm_base_url: "",
     llm_model: "",
     llm_api_key: "",
+    primary_resume_track: "A",
+    scan_mode: "both",
+    daily_check_enabled: "true",
+    daily_check_time: "09:30",
+    last_daily_check_date: "",
+    last_daily_check_summary: "",
+    watchlist_keywords: JSON.stringify([
+      "AI应用测试",
+      "AI测试",
+      "软件测试",
+      "测试工程师",
+      "AI评测",
+      "大模型测试工程师",
+      "模型评测工程师",
+      "AI训练师",
+      "提示词工程师",
+    ]),
   };
   const upsertSetting = db.prepare(`
     INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)
@@ -365,6 +386,17 @@ export function getResumeByTrack(trackKey) {
   };
 }
 
+export function getPrimaryResume(preferredTrack = null) {
+  const settings = getSettings();
+  const key = preferredTrack || settings.primary_resume_track || "A";
+  const primary = getResumeByTrack(key);
+  if (primary && ((primary.experiences?.length || 0) > 0 || (primary.summary || "").length > 30)) {
+    return primary;
+  }
+  const all = getResumes();
+  return all.find((r) => /2年/.test(r.years_label || "")) || primary || all[0] || null;
+}
+
 export function saveResume(trackKey, payload) {
   const ts = now();
   db.prepare(`
@@ -440,7 +472,7 @@ export function saveCompanyIntel(intel) {
 }
 
 export function listJobs() {
-  const rows = db.prepare("SELECT * FROM jobs ORDER BY id DESC").all();
+  const rows = db.prepare("SELECT * FROM jobs ORDER BY match_score DESC, updated_at DESC, id DESC").all();
   return rows.map(hydrateJob);
 }
 
@@ -466,7 +498,8 @@ export function upsertJob(job) {
         parsed_json = ?, risk_score = ?, zone = ?, recommended_track = ?,
         assigned_profile_id = COALESCE(assigned_profile_id, ?),
         evidence_json = ?, intel_summary = ?, match_score = ?, match_json = ?,
-        tailored_resume_json = ?, custom_greeting = ?,
+        tailored_resume_json = ?, matched_query = CASE WHEN ? != '' THEN ? ELSE matched_query END,
+        apply_advice = ?, custom_greeting = ?,
         status = CASE WHEN status = 'NEW' AND ? = 'SKIP' THEN 'SKIP' ELSE status END,
         updated_at = ?
       WHERE id = ?
@@ -495,6 +528,9 @@ export function upsertJob(job) {
       job.match_score ?? 0,
       JSON.stringify(job.match ?? {}),
       JSON.stringify(job.tailored_resume ?? {}),
+      job.matched_query ?? "",
+      job.matched_query ?? "",
+      job.apply_advice ?? "REVISE_FIRST",
       job.custom_greeting ?? "",
       job.zone ?? "GREEN",
       ts,
@@ -511,8 +547,8 @@ export function upsertJob(job) {
       jd_text, company_intro, job_url, source_profile_id, parsed_json, risk_score, zone,
       recommended_track, manual_track, assigned_profile_id, evidence_json,
       intel_summary, match_score, match_json, tailored_resume_json,
-      custom_greeting, status, notes, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      matched_query, apply_advice, custom_greeting, status, notes, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     externalId,
     job.job_title ?? "AI测试工程师",
@@ -543,6 +579,8 @@ export function upsertJob(job) {
     job.match_score ?? 0,
     JSON.stringify(job.match ?? {}),
     JSON.stringify(job.tailored_resume ?? {}),
+    job.matched_query ?? "",
+    job.apply_advice ?? "REVISE_FIRST",
     job.custom_greeting ?? "",
     initialStatus,
     job.notes ?? "",
@@ -646,6 +684,12 @@ export function getFunnelStats() {
   return {
     A: summarize("A"),
     B: summarize("B"),
+    direct_apply: jobs.filter((j) => j.apply_advice === "DIRECT_APPLY").length,
+    revise_first: jobs.filter((j) => j.apply_advice === "REVISE_FIRST").length,
+    low_fit: jobs.filter((j) => j.apply_advice === "LOW_FIT").length,
+    delivered: jobs.filter((j) => ["DELIVERED", "REPLIED", "INTERVIEW", "REJECTED"].includes(j.status)).length,
+    replied: jobs.filter((j) => ["REPLIED", "INTERVIEW"].includes(j.status)).length,
+    interviews: jobs.filter((j) => j.status === "INTERVIEW").length,
     skipped: jobs.filter((j) => j.zone === "SKIP" || j.status === "SKIP").length,
     total_jobs: jobs.length,
   };

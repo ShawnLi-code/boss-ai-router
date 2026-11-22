@@ -66,6 +66,19 @@ export async function refineMatchWithLlm(job, resume, baseResult) {
         gap_tips: parsed.gap_tips || baseResult.tailored_resume.gap_tips,
       },
       custom_greeting: greeting.length > 120 ? `${greeting.slice(0, 117)}...` : greeting,
+      greeting_templates: Array.isArray(baseResult.greeting_templates)
+        ? [
+            {
+              key: "llm",
+              label: "AI 定制推荐",
+              text: greeting.length > 120 ? `${greeting.slice(0, 117)}...` : greeting,
+            },
+            ...baseResult.greeting_templates.filter((t) => t.key !== "llm"),
+          ]
+        : baseResult.greeting_templates,
+      revise_suggestions: parsed.gap_tips
+        ? [parsed.gap_tips, ...(baseResult.revise_suggestions || []).slice(0, 2)]
+        : baseResult.revise_suggestions,
     };
   } catch {
     return { ...baseResult, used_llm: false };

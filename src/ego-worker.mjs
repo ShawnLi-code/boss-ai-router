@@ -549,6 +549,42 @@ console.log("RESULT_JSON:" + JSON.stringify({
   }
 }
 
+export async function openBossJobPage({
+  profileId = "Profile 1",
+  jobUrl = "",
+  companyName = "",
+  jobTitle = "",
+  onLog = () => {},
+}) {
+  const targetUrl =
+    jobUrl && /^https?:\/\//i.test(jobUrl)
+      ? jobUrl
+      : `https://www.zhipin.com/web/geek/jobs?query=${encodeURIComponent(`${companyName} ${jobTitle}`.trim())}`;
+  acquireLock(`打开岗位详情页「${companyName} · ${jobTitle}」(${profileId})`);
+  try {
+    onLog(`正在使用 ${profileId} 在 Ego 浏览器打开「${companyName} · ${jobTitle}」...`);
+    const code = `
+const task = await taskSpace("boss-open-" + Date.now(), { profileId: ${JSON.stringify(profileId)} });
+const page = (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
+await page.goto(${JSON.stringify(targetUrl)}, { waitUntil: "domcontentloaded", timeout: 25000 });
+await page.waitForTimeout(1600);
+await task.handOff();
+console.log("RESULT_JSON:" + JSON.stringify({
+  status: "HANDOFF",
+  taskSpaceId: task.spaceId,
+  url: await page.url(),
+  message: "已在 Ego 浏览器打开岗位页面并交给你操作，你可以直接查看或发起沟通、发送简历",
+}));
+`;
+    const { combined } = await runEgoScript("open-job-page", code, 45_000);
+    const res = parseMarkedJson(combined);
+    onLog(`🔗 ${res.message} (TaskSpace #${res.taskSpaceId})`);
+    return res;
+  } finally {
+    releaseLock();
+  }
+}
+
 export async function prepareBossDelivery({
   profileId,
   jobUrl,
@@ -558,15 +594,19 @@ export async function prepareBossDelivery({
   autoSend = false,
   onLog = () => {},
 }) {
-  acquireLock(`准备投递「${companyName} · ${jobTitle}」(${profileId})`);
+  const targetUrl =
+    jobUrl && /^https?:\/\//i.test(jobUrl)
+      ? jobUrl
+      : `https://www.zhipin.com/web/geek/jobs?query=${encodeURIComponent(`${companyName} ${jobTitle}`.trim())}`;
+  acquireLock(`准备沟通「${companyName} · ${jobTitle}」(${profileId})`);
   try {
-    onLog(`正在切换至 ${profileId} 打开岗位页（${companyName} · ${jobTitle}）...`);
+    onLog(`正在切换至 ${profileId} 打开岗位/沟通页（${companyName} · ${jobTitle}）...`);
     const code = `
 const randDelay = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
 const task = await taskSpace("boss-deliver-" + Date.now(), { profileId: ${JSON.stringify(profileId)} });
 const page = (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
 
-await page.goto(${JSON.stringify(jobUrl)}, { waitUntil: "domcontentloaded", timeout: 25000 });
+await page.goto(${JSON.stringify(targetUrl)}, { waitUntil: "domcontentloaded", timeout: 25000 });
 await page.waitForLoadState("networkidle", { timeout: 12000 }).catch(() => {});
 await page.waitForTimeout(randDelay(2500, 4200));
 
@@ -617,7 +657,7 @@ if (await page.evaluate(() => /verify-slider|security/i.test(location.href) || /
 }
 
 // 检查聊天输入框并填入专属话术
-const inputSelector = "div.chat-input[contenteditable='true'], textarea.input-area, .edit-area [contenteditable='true']";
+const inputSelector = "div.chat-input[contenteditable='true'], textarea.input-area, .edit-area [contenteditable='true'], .greet-boss-dialog textarea, .chat-conversation [contenteditable='true']";
 const hasInput = await page.waitForSelector(inputSelector, { state: "visible", timeout: 8000 }).then(() => true).catch(() => false);
 
 if (hasInput) {

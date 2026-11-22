@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Boss AI Router</title>
+  <title>Boss AI Router · 每日巡检与 JD 匹配助手</title>
   <link rel="icon" type="image/png" href="/logo.png">
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -16,36 +16,37 @@
         <img src="/logo.png" alt="Boss AI Router" width="32" height="32" class="sidebar-logo">
         <div class="sidebar-brand-text">
           <span class="sidebar-title">Boss AI Router</span>
-          <span id="app-version-tag" class="sidebar-version">v0.4.0</span>
+          <span id="app-version-tag" class="sidebar-version">v0.5.0</span>
         </div>
       </div>
 
       <nav class="sidebar-nav" aria-label="工作区模块">
         <button type="button" class="nav-item" data-view="jobs" aria-current="page">
-          <span>岗位工作台</span>
+          <span>岗位巡检与匹配</span>
           <span class="nav-count" id="nav-jobs-count">0</span>
         </button>
         <button type="button" class="nav-item" data-view="resumes">
-          <span>简历母版</span>
+          <span>2年简历母版</span>
         </button>
         <button type="button" class="nav-item" data-view="funnel">
-          <span>漏斗与黑名单</span>
+          <span>黑名单与统计</span>
         </button>
         <button type="button" class="nav-item" data-view="settings">
-          <span>设置与更新</span>
+          <span>巡检计划与设置</span>
         </button>
       </nav>
 
       <div class="sidebar-section">
-        <div class="sidebar-section-label">双号当日额度</div>
+        <div class="sidebar-section-label">采集 / 投递账号额度</div>
         <div class="quota-row">
-          <span class="quota-name" id="side-a-label">A轨 · 真实日期</span>
+          <span class="quota-name" id="side-a-label">账号 1</span>
           <span class="quota-val" id="side-a-quota">0/25</span>
         </div>
         <div class="quota-row">
-          <span class="quota-name" id="side-b-label">B轨 · 绿区池</span>
+          <span class="quota-name" id="side-b-label">账号 2</span>
           <span class="quota-val" id="side-b-quota">0/25</span>
         </div>
+        <div class="patrol-mini" id="side-patrol-status">今日巡检：待执行</div>
       </div>
 
       <div class="sidebar-footer">
@@ -62,7 +63,6 @@
 
     <!-- Main Content Surface -->
     <main class="workspace">
-      <!-- Top Alert Strips (hidden unless active) -->
       <section id="update-banner" class="alert-strip alert-info" hidden>
         <div>
           <strong id="update-banner-title">发现 GitHub 新版本</strong>
@@ -89,7 +89,8 @@
       <section id="view-jobs" class="view-pane">
         <header class="toolbar">
           <div class="toolbar-inputs">
-            <input type="text" id="scrape-query" value="AI测试" placeholder="搜索关键词" aria-label="搜索关键词" class="input-compact input-kw">
+            <button type="button" id="btn-toggle-watchlist" class="btn btn-secondary btn-sm">巡检清单 (<span id="watchlist-count-label">9</span>)</button>
+            <input type="text" id="scrape-query" value="AI测试" placeholder="单关键词快采" aria-label="单关键词搜索" class="input-compact input-kw">
             <select id="scrape-city" aria-label="城市" class="input-compact">
               <option value="101280100">广州</option>
               <option value="101280600">深圳</option>
@@ -104,76 +105,103 @@
               <option value="month">本月内活跃</option>
               <option value="all">活跃度不限</option>
             </select>
-            <input type="number" id="scrape-max" min="1" max="20" value="8" aria-label="抓取上限" class="input-compact input-num" title="单次安全上限">
-            <select id="scrape-profile" aria-label="采集所用Ego账号" class="input-compact"></select>
+            <input type="number" id="scrape-max" min="1" max="15" value="5" aria-label="每词抓取上限" class="input-compact input-num" title="每个关键词抓取条数">
+            <select id="scrape-mode" aria-label="刷岗账号策略" class="input-compact">
+              <option value="both">双号分别刷一遍（自动去重）</option>
+              <option value="single:Profile 1">仅用 Profile 1 采集</option>
+              <option value="single:Profile 2">仅用 Profile 2 采集</option>
+            </select>
           </div>
           <div class="toolbar-actions">
-            <button type="button" id="btn-scrape" class="btn btn-primary btn-sm">低速采集并评估</button>
-            <button type="button" id="btn-open-import" class="btn btn-secondary btn-sm">导入 JSON</button>
+            <button type="button" id="btn-patrol" class="btn btn-primary btn-sm">一键每日巡检</button>
+            <button type="button" id="btn-scrape" class="btn btn-secondary btn-sm">单词采集</button>
+            <button type="button" id="btn-recalc-all" class="btn btn-ghost btn-sm" title="用最新2年简历重新给所有已保存岗位评分">重算全部评分</button>
+            <button type="button" id="btn-open-import" class="btn btn-ghost btn-sm">导入 JSON</button>
           </div>
         </header>
 
-        <div class="subbar">
-          <div class="segmented" role="group" aria-label="按风控区域筛选">
-            <button type="button" class="seg-btn active" data-zone="ALL">全部 <span id="cnt-all">0</span></button>
-            <button type="button" class="seg-btn" data-zone="RED">A轨·高危 <span id="cnt-red">0</span></button>
-            <button type="button" class="seg-btn" data-zone="YELLOW">待探底 <span id="cnt-yellow">0</span></button>
-            <button type="button" class="seg-btn" data-zone="GREEN">B轨·绿区 <span id="cnt-green">0</span></button>
-            <button type="button" class="seg-btn" data-zone="SKIP">已拦截 <span id="cnt-skip">0</span></button>
+        <!-- Collapsible 9-Role Watchlist Drawer -->
+        <div id="watchlist-drawer" class="watchlist-drawer" hidden>
+          <div class="watchlist-head">
+            <span class="muted">勾选本次巡检包含的目标岗位方向（统一按 2 年经历主简历评估与去重保存）：</span>
+            <div class="watchlist-actions">
+              <input type="text" id="new-watchlist-kw" placeholder="新增岗位关键词..." class="input-compact" style="width:150px;">
+              <button type="button" id="btn-add-watchlist" class="btn btn-secondary btn-xs">添加</button>
+              <button type="button" id="btn-save-watchlist" class="btn btn-ghost btn-xs">保存清单为默认</button>
+            </div>
           </div>
-          <div class="live-log-inline" aria-live="polite">
-            <span id="live-log-latest">就绪 · 低速拟人间隔 4.5s–8.5s</span>
+          <div id="watchlist-chips" class="watchlist-chips"></div>
+        </div>
+
+        <div class="subbar">
+          <div class="segmented" role="group" aria-label="按投递建议筛选">
+            <button type="button" class="seg-btn active" data-filter="ALL">全部 <span id="cnt-all">0</span></button>
+            <button type="button" class="seg-btn" data-filter="DIRECT_APPLY">可直接投 <span id="cnt-direct">0</span></button>
+            <button type="button" class="seg-btn" data-filter="REVISE_FIRST">改微调后投 <span id="cnt-revise">0</span></button>
+            <button type="button" class="seg-btn" data-filter="LOW_FIT">匹配偏低 <span id="cnt-low">0</span></button>
+            <button type="button" class="seg-btn" data-filter="RISK_SKIP">高危/拦截 <span id="cnt-risk">0</span></button>
+          </div>
+          <div class="subbar-right">
+            <input type="search" id="job-search-input" placeholder="过滤已保存岗位 / 公司 / JD" aria-label="过滤已保存岗位" class="input-compact" style="width:190px;">
+            <select id="job-sort-select" aria-label="排序方式" class="input-compact">
+              <option value="match">按匹配分高→低</option>
+              <option value="recent">按最新采集</option>
+              <option value="risk">按背调风险低→高</option>
+            </select>
+            <div class="live-log-inline" aria-live="polite">
+              <span id="live-log-latest">就绪 · 统一按 2年经历评估 · 低速拟人 4.5s–8.5s</span>
+            </div>
           </div>
         </div>
 
         <div class="split-workspace">
           <!-- Left List -->
-          <div class="job-list-pane" id="job-list-pane" role="listbox" aria-label="岗位列表">
-            <div class="empty-state">暂无岗位，点击上方“低速采集并评估”或“导入 JSON”。</div>
+          <div class="job-list-pane" id="job-list-pane" role="listbox" aria-label="已保存岗位列表">
+            <div class="empty-state">暂无岗位，点击上方“一键每日巡检”或“单词采集”。</div>
           </div>
 
           <!-- Right Inspector -->
           <div class="job-inspector-pane" id="job-inspector-pane">
-            <div class="empty-state">在左侧选择一个岗位，查看风控拆解、背调舆情、事实锁 Diff 并执行分号投递。</div>
+            <div class="empty-state">在左侧选择一个已保存岗位，查看 5 维度匹配打分、可否直投诊断、背调风险、沟通模板并一键跳转沟通页。</div>
           </div>
         </div>
       </section>
 
-      <!-- VIEW 2: Resumes Master -->
+      <!-- VIEW 2: Unified 2-Year Master Resume -->
       <section id="view-resumes" class="view-pane scroll-pane" hidden>
         <div class="view-header">
           <div>
-            <h2>双号简历母版</h2>
-            <p class="muted">A/B 轨各自从对应 Ego 账号读取在线简历；动态改写带有“事实锁”，不篡改公司与时间线。</p>
+            <h2>两年经历主简历（统一评估基准）</h2>
+            <p class="muted">所有采集岗位均按这份 2 年经历主简历统一评估 JD 匹配度、生成微调建议与沟通模板；事实锁禁止篡改公司与时间线。</p>
           </div>
-          <button type="button" id="btn-swap-tracks" class="btn btn-secondary btn-sm">对调 A/B 轨 Ego 绑定</button>
+          <button type="button" id="btn-recalc-from-resumes" class="btn btn-secondary btn-sm">保存后重算全部岗位评分</button>
         </div>
-        <div class="resumes-grid" id="resumes-grid"></div>
+        <div id="resumes-container" class="stack-sm"></div>
       </section>
 
       <!-- VIEW 3: Funnel & Blacklist -->
       <section id="view-funnel" class="view-pane scroll-pane" hidden>
         <div class="view-header">
           <div>
-            <h2>转化漏斗、黑名单与投递审计</h2>
-            <p class="muted">对比 A/B 轨回复率与约面率，管理关联主体避坑黑名单与投递记录。</p>
+            <h2>岗位统计、黑名单与沟通审计</h2>
+            <p class="muted">查看每日巡检累积岗位的匹配分布、投递推进情况，以及避坑黑名单拦截记录。</p>
           </div>
           <a class="btn btn-secondary btn-sm" href="/api/export" download>导出全量 JSON</a>
         </div>
         <div class="two-col-grid">
           <section class="surface-box">
-            <h3>双轨漏斗统计</h3>
+            <h3>岗位匹配与投递漏斗</h3>
             <div id="funnel-cards" class="funnel-grid"></div>
             <hr class="hairline">
-            <h3>近期投递与防撞车审计</h3>
+            <h3>近期沟通跳转与防撞车审计</h3>
             <div class="logs-list" id="delivery-logs-list">
-              <p class="muted">暂无投递记录。</p>
+              <p class="muted">暂无沟通记录。</p>
             </div>
           </section>
 
           <section class="surface-box">
             <h3>企业避坑黑名单</h3>
-            <p class="muted">按主品牌归一化匹配集团/子公司，同时拦截 A/B 轨重复投递。</p>
+            <p class="muted">按主品牌归一化匹配集团/子公司，同时拦截所有账号重复触达。</p>
             <form id="blacklist-form" class="stack-sm">
               <textarea id="blacklist-input" rows="3" placeholder="每行一家公司名称，或用逗号分隔"></textarea>
               <div class="right-row">
@@ -185,29 +213,44 @@
         </div>
       </section>
 
-      <!-- VIEW 4: Settings & Updates -->
+      <!-- VIEW 4: Settings, Patrol Schedule & Updates -->
       <section id="view-settings" class="view-pane scroll-pane" hidden>
         <div class="view-header">
           <div>
-            <h2>账号绑定、防封策略与 GitHub 更新</h2>
-            <p class="muted">配置 A/B 轨 Ego Profile、当日防封熔断开关、可选大模型接口与自动更新源。</p>
+            <h2>巡检计划、账号绑定与 GitHub 更新</h2>
+            <p class="muted">配置每日巡检默认目标岗位、两个 Ego 采集/发送账号的当日限额、防封延迟与可选大模型。</p>
           </div>
         </div>
         <div class="two-col-grid">
           <section class="surface-box">
-            <h3>Ego 账号轨道与熔断状态</h3>
+            <h3>Ego 账号与当日熔断状态</h3>
+            <p class="muted">两个账号可分别独立刷岗扩充岗位池，发送沟通时可任选一个账号跳转。</p>
             <div id="tracks-config-list" class="stack-sm"></div>
           </section>
           <section class="surface-box">
-            <h3>防封、LLM 与自动更新参数</h3>
+            <h3>每日巡检计划、防封与 LLM 配置</h3>
             <form id="settings-form" class="form-grid">
-              <label class="field">
-                <span>最小拟人间隔 (ms, &ge;3000)</span>
-                <input type="number" name="delay_min_ms" min="3000" max="20000" value="4500">
+              <label class="field" style="grid-column: 1 / -1;">
+                <span>每日巡检目标岗位（逗号或换行分隔）</span>
+                <textarea name="watchlist_text" rows="3" placeholder="AI应用测试, AI测试, 软件测试, 测试工程师, AI评测, 大模型测试工程师, 模型评测工程师, AI训练师, 提示词工程师"></textarea>
               </label>
               <label class="field">
-                <span>最大拟人间隔 (ms)</span>
-                <input type="number" name="delay_max_ms" min="4000" max="30000" value="8500">
+                <span>应用打开时自动每日巡检</span>
+                <select name="daily_check_enabled">
+                  <option value="true">开启（每日到点自动发起一次低速巡检）</option>
+                  <option value="false">关闭（仅手动点击一键巡检）</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>每日自动巡检时间</span>
+                <input type="time" name="daily_check_time" value="09:30">
+              </label>
+              <label class="field">
+                <span>默认刷岗策略</span>
+                <select name="scan_mode">
+                  <option value="both">双号分别刷一遍（发现更多岗位+去重）</option>
+                  <option value="single">仅使用单号刷岗</option>
+                </select>
               </label>
               <label class="field">
                 <span>自动触发联网背调补查</span>
@@ -215,6 +258,14 @@
                   <option value="true">开启（规模 &ge;100 或 &ge;A轮）</option>
                   <option value="false">关闭（仅手动补查）</option>
                 </select>
+              </label>
+              <label class="field">
+                <span>最小拟人间隔 (ms, &ge;3000)</span>
+                <input type="number" name="delay_min_ms" min="3000" max="20000" value="4500">
+              </label>
+              <label class="field">
+                <span>最大拟人间隔 (ms)</span>
+                <input type="number" name="delay_max_ms" min="4000" max="30000" value="8500">
               </label>
               <label class="field">
                 <span>启动时自动检查 GitHub 更新</span>

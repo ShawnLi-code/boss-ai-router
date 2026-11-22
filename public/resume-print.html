@@ -9,8 +9,8 @@
       --ink: #0f172a;
       --muted: #475569;
       --border: #cbd5e1;
-      --accent: #3730a3;
-      --bg-pill: #eef2ff;
+      --accent: #0f766e;
+      --bg-pill: #f0fdfa;
     }
     * { box-sizing: border-box; }
     body {
@@ -123,7 +123,7 @@
         if (res.ok) job = await res.json();
       }
       const resState = await fetch("/api/state").then((r) => r.json());
-      const effectiveTrack = track || (job?.manual_track || (job?.recommended_track?.startsWith("A") ? "A" : "B")) || "B";
+      const effectiveTrack = track || resState.settings?.primary_resume_track || "A";
       const resume = resState.resumes.find((r) => r.track_key === effectiveTrack) || resState.resumes[0];
       const tailored = job?.tailored_resume || {};
       const skills = tailored.emphasized_skills?.length ? tailored.emphasized_skills : (resume?.skills || []);

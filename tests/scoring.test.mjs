@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { evaluateJobRisk, shouldTriggerWebSearch } from "../src/scoring.mjs";
 import { analyzeSearchSnippets } from "../src/websearch.mjs";
-import { factGuardCheck, matchResumeToJob } from "../src/matcher.mjs";
+import { DEFAULT_TARGET_ROLES, factGuardCheck, matchResumeToJob } from "../src/matcher.mjs";
 import { normalizeCompanyRoot } from "../src/db.mjs";
 import { compareSemver } from "../src/updater.mjs";
 
@@ -106,7 +106,7 @@ test("matchResumeToJob 输出匹配分及<=120字专属打招呼话术", () => {
   const m = matchResumeToJob(job, resume);
   assert.ok(m.match_score >= 70);
   assert.ok(m.custom_greeting.length > 10 && m.custom_greeting.length <= 120);
-  assert.ok(m.matched_keywords.includes("RAG"));
+  assert.ok(m.matched_keywords.some((k) => k.includes("RAG")));
 });
 
 test("大厂驻场外包 + B轮 + 猎头 应进入 RED 区", () => {
@@ -214,6 +214,74 @@ test("compareSemver 版本号比对正确", () => {
   assert.equal(compareSemver("0.3.0", "0.3.0"), 0);
   assert.equal(compareSemver("0.2.9", "0.3.0"), -1);
 });
+
+test("DEFAULT_TARGET_ROLES 包含 9 类目标巡检岗位", () => {
+  assert.equal(DEFAULT_TARGET_ROLES.length, 9);
+  for (const r of ["AI应用测试", "AI评测", "大模型测试工程师", "模型评测工程师", "AI训练师", "提示词工程师"]) {
+    assert.ok(DEFAULT_TARGET_ROLES.includes(r));
+  }
+});
+
+test("5维度匹配打分：同义词归一 + 可直接投(DIRECT_APPLY) + 3套沟通模板", () => {
+  const job = {
+    company_name: "灵眸智能科技有限公司",
+    job_title: "大模型测试工程师",
+    experience_req: "1-3年",
+    education_req: "本科",
+    recruiter_title: "测试经理",
+    jd_text: "1.负责公司Web及移动端功能测试、编写测试用例与回归闭环；2.熟悉API测试与Python自动化脚本；3.负责大模型效果评估与提示词调优，跟踪Badcase。",
+  };
+  const resume2y = {
+    track_key: "A",
+    years_label: "2年经验",
+    summary: "具备2年软件测试及自动化测试经验，独立负责Web与Android客户端全流程测试，参与Prompt与RAG问答效果验证。",
+    skills: ["Python", "Pytest", "Requests", "Postman", "SQL", "Docker", "Linux"],
+    experiences: [
+      { company: "A科技", role: "软件测试", period: "2025.02-2026.03", content: "独立负责Web和Android功能测试、接口测试、回归测试，编写测试用例1000+条" },
+      { company: "B科技", role: "测试工程师", period: "2024.06-2024.12", content: "接口自动化、性能测试与Badcase定位，Prompt调优验证" },
+    ],
+    projects: [{ name: "RAG问答测试平台", role: "测试负责人", content: "大模型问答准确率评测与测试用例闭环" }],
+    education: [{ school: "示例大学", degree: "本科" }],
+  };
+
+  const m = matchResumeToJob(job, resume2y);
+  assert.ok(m.match_score >= 76, `expected >=76, got ${m.match_score}`);
+  assert.equal(m.apply_advice, "DIRECT_APPLY");
+  assert.equal(m.dimensions.work_content.max, 35);
+  assert.equal(m.dimensions.tech_stack.max, 25);
+  assert.equal(m.dimensions.hard_gate.score, 15);
+  assert.ok(m.matched_keywords.includes("接口测试"));
+  assert.ok(m.matched_keywords.includes("Prompt/提示词"));
+  assert.equal(m.greeting_templates.length, 3);
+  for (const tpl of m.greeting_templates) {
+    assert.ok(tpl.text.length > 10 && tpl.text.length <= 120);
+  }
+});
+
+test("5维度匹配打分：硬性门槛超档或偏离赛道应判定 LOW_FIT", () => {
+  const job = {
+    company_name: "某汽车电子公司",
+    job_title: "高级嵌入式测试工程师",
+    experience_req: "5年以上",
+    education_req: "硕士",
+    recruiter_title: "HRBP",
+    jd_text: "负责C++驱动、芯片验证、射频测试与汽车底盘嵌入式开发测试。",
+  };
+  const resume2y = {
+    track_key: "A",
+    years_label: "2年经验",
+    summary: "2年Web与接口测试经验。",
+    skills: ["Python", "Pytest", "Postman"],
+    experiences: [{ company: "A科技", role: "软件测试", period: "2024.06-2026.03", content: "Web后台功能与接口测试" }],
+    projects: [],
+    education: [{ school: "示例大学", degree: "本科" }],
+  };
+
+  const m = matchResumeToJob(job, resume2y);
+  assert.equal(m.apply_advice, "LOW_FIT");
+  assert.ok(m.match_score < 55);
+});
+
 
 
 

@@ -1,12 +1,28 @@
+const DEFAULT_ROLES = [
+  "AI应用测试",
+  "AI测试",
+  "软件测试",
+  "测试工程师",
+  "AI评测",
+  "大模型测试工程师",
+  "模型评测工程师",
+  "AI训练师",
+  "提示词工程师",
+];
+
 const state = {
   data: null,
   egoProfiles: [],
   activeView: "jobs",
-  activeZone: "ALL",
+  activeFilter: "ALL",
+  searchText: "",
+  sortBy: "match",
   selectedJobId: null,
   inspectorTab: "match",
   pendingVerifySpaceId: null,
   latestUpdate: null,
+  watchlist: [...DEFAULT_ROLES],
+  selectedWatchlist: new Set(DEFAULT_ROLES),
 };
 
 const els = {
@@ -16,6 +32,7 @@ const els = {
   sideAQuota: document.getElementById("side-a-quota"),
   sideBLabel: document.getElementById("side-b-label"),
   sideBQuota: document.getElementById("side-b-quota"),
+  sidePatrolStatus: document.getElementById("side-patrol-status"),
   btnCheckUpdate: document.getElementById("btn-check-update"),
   updateBanner: document.getElementById("update-banner"),
   updateBannerTitle: document.getElementById("update-banner-title"),
@@ -37,23 +54,34 @@ const els = {
   verifyDesc: document.getElementById("verify-desc"),
   verifyDoneBtn: document.getElementById("verify-done-btn"),
   verifyDismissBtn: document.getElementById("verify-dismiss-btn"),
+  btnToggleWatchlist: document.getElementById("btn-toggle-watchlist"),
+  watchlistCountLabel: document.getElementById("watchlist-count-label"),
+  watchlistDrawer: document.getElementById("watchlist-drawer"),
+  watchlistChips: document.getElementById("watchlist-chips"),
+  newWatchlistKw: document.getElementById("new-watchlist-kw"),
+  btnAddWatchlist: document.getElementById("btn-add-watchlist"),
+  btnSaveWatchlist: document.getElementById("btn-save-watchlist"),
   scrapeQuery: document.getElementById("scrape-query"),
   scrapeCity: document.getElementById("scrape-city"),
   scrapeHrActive: document.getElementById("scrape-hr-active"),
   scrapeMax: document.getElementById("scrape-max"),
-  scrapeProfile: document.getElementById("scrape-profile"),
+  scrapeMode: document.getElementById("scrape-mode"),
+  btnPatrol: document.getElementById("btn-patrol"),
   btnScrape: document.getElementById("btn-scrape"),
+  btnRecalcAll: document.getElementById("btn-recalc-all"),
   btnOpenImport: document.getElementById("btn-open-import"),
   cntAll: document.getElementById("cnt-all"),
-  cntRed: document.getElementById("cnt-red"),
-  cntYellow: document.getElementById("cnt-yellow"),
-  cntGreen: document.getElementById("cnt-green"),
-  cntSkip: document.getElementById("cnt-skip"),
+  cntDirect: document.getElementById("cnt-direct"),
+  cntRevise: document.getElementById("cnt-revise"),
+  cntLow: document.getElementById("cnt-low"),
+  cntRisk: document.getElementById("cnt-risk"),
+  jobSearchInput: document.getElementById("job-search-input"),
+  jobSortSelect: document.getElementById("job-sort-select"),
   jobListPane: document.getElementById("job-list-pane"),
   jobInspectorPane: document.getElementById("job-inspector-pane"),
   liveLogLatest: document.getElementById("live-log-latest"),
-  resumesGrid: document.getElementById("resumes-grid"),
-  btnSwapTracks: document.getElementById("btn-swap-tracks"),
+  resumesContainer: document.getElementById("resumes-container"),
+  btnRecalcFromResumes: document.getElementById("btn-recalc-from-resumes"),
   funnelCards: document.getElementById("funnel-cards"),
   tracksConfigList: document.getElementById("tracks-config-list"),
   settingsForm: document.getElementById("settings-form"),
@@ -71,11 +99,17 @@ const els = {
 const STATUS_LABELS = {
   NEW: "待处理",
   SKIP: "已拦截",
-  PREPARED: "已预填待发",
+  PREPARED: "已打开沟通",
   DELIVERED: "已投递",
   REPLIED: "HR已回复",
   INTERVIEW: "已约面试",
   REJECTED: "已婉拒/结束",
+};
+
+const ADVICE_LABELS = {
+  DIRECT_APPLY: "可直接投",
+  REVISE_FIRST: "改后投",
+  LOW_FIT: "匹配偏低",
 };
 
 function esc(val) {
@@ -109,6 +143,7 @@ function setWorkerBusy(busy, label = "") {
   els.workerPill.classList.toggle("status-busy", busy);
   els.workerStatusText.textContent = busy ? (label || "Ego 执行中...") : "Ego 引擎空闲";
   els.btnScrape.disabled = busy;
+  els.btnPatrol.disabled = busy;
 }
 
 function showVerifyBanner(payload) {
@@ -165,20 +200,46 @@ els.themeToggleBtn.addEventListener("click", () => {
   root.setAttribute("data-theme", next);
 });
 
-document.querySelectorAll(".seg-btn[data-zone]").forEach((btn) => {
+els.btnToggleWatchlist.addEventListener("click", () => {
+  els.watchlistDrawer.hidden = !els.watchlistDrawer.hidden;
+});
+
+document.querySelectorAll(".seg-btn[data-filter]").forEach((btn) => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".seg-btn[data-zone]").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".seg-btn[data-filter]").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
-    state.activeZone = btn.dataset.zone;
+    state.activeFilter = btn.dataset.filter;
     renderJobList();
   });
 });
+
+els.jobSearchInput.addEventListener("input", () => {
+  state.searchText = els.jobSearchInput.value.trim().toLowerCase();
+  renderJobList();
+});
+
+els.jobSortSelect.addEventListener("change", () => {
+  state.sortBy = els.jobSortSelect.value;
+  renderJobList();
+});
+
+function syncWatchlistFromSettings(settings = {}) {
+  try {
+    const arr = JSON.parse(settings.watchlist_keywords || "[]");
+    if (Array.isArray(arr) && arr.length > 0) {
+      const cleaned = [...new Set(arr.map((s) => String(s).trim()).filter(Boolean))];
+      state.watchlist = cleaned;
+      state.selectedWatchlist = new Set(cleaned);
+    }
+  } catch {}
+}
 
 async function refreshState() {
   const data = await api("/api/state");
   state.data = data;
   if (data.version) els.versionTag.textContent = `v${data.version}`;
-  setWorkerBusy(Boolean(data.activeLock), data.activeLock?.label);
+  syncWatchlistFromSettings(data.settings);
+  setWorkerBusy(Boolean(data.activeLock || data.patrolRunning), data.activeLock?.label || (data.patrolRunning ? "每日巡检中..." : ""));
   if (!state.selectedJobId && data.jobs?.length > 0) {
     state.selectedJobId = data.jobs[0].id;
   }
@@ -201,6 +262,7 @@ async function loadEgoProfiles() {
 function renderAll() {
   if (!state.data) return;
   renderSidebarSummary();
+  renderWatchlistChips();
   renderProfileSelectors();
   renderJobList();
   renderInspector();
@@ -212,70 +274,147 @@ function renderAll() {
 }
 
 function renderSidebarSummary() {
-  const { jobs, tracks } = state.data;
+  const { jobs, tracks, settings } = state.data;
   els.navJobsCount.textContent = jobs.length;
   els.cntAll.textContent = jobs.length;
-  els.cntRed.textContent = jobs.filter((j) => j.zone === "RED").length;
-  els.cntYellow.textContent = jobs.filter((j) => j.zone === "YELLOW").length;
-  els.cntGreen.textContent = jobs.filter((j) => j.zone === "GREEN").length;
-  els.cntSkip.textContent = jobs.filter((j) => j.zone === "SKIP").length;
+  els.cntDirect.textContent = jobs.filter((j) => (j.apply_advice || j.match?.apply_advice) === "DIRECT_APPLY").length;
+  els.cntRevise.textContent = jobs.filter((j) => (j.apply_advice || j.match?.apply_advice) === "REVISE_FIRST").length;
+  els.cntLow.textContent = jobs.filter((j) => (j.apply_advice || j.match?.apply_advice) === "LOW_FIT").length;
+  els.cntRisk.textContent = jobs.filter((j) => j.zone === "RED" || j.zone === "SKIP").length;
 
-  const trackA = tracks.find((t) => t.track_key === "A");
-  const trackB = tracks.find((t) => t.track_key === "B");
-  if (trackA) {
-    els.sideALabel.textContent = `A轨 · ${trackA.profile_name}`;
-    els.sideAQuota.textContent = `${trackA.today_delivered}/${trackA.daily_limit}${trackA.breaker_active ? " 熔断" : ""}`;
+  const t1 = tracks[0];
+  const t2 = tracks[1];
+  if (t1) {
+    els.sideALabel.textContent = `${t1.profile_name} (${t1.profile_id})`;
+    els.sideAQuota.textContent = `${t1.today_delivered}/${t1.daily_limit}${t1.breaker_active ? " 熔断" : ""}`;
   }
-  if (trackB) {
-    els.sideBLabel.textContent = `B轨 · ${trackB.profile_name}`;
-    els.sideBQuota.textContent = `${trackB.today_delivered}/${trackB.daily_limit}${trackB.breaker_active ? " 熔断" : ""}`;
+  if (t2) {
+    els.sideBLabel.textContent = `${t2.profile_name} (${t2.profile_id})`;
+    els.sideBQuota.textContent = `${t2.today_delivered}/${t2.daily_limit}${t2.breaker_active ? " 熔断" : ""}`;
   }
+
+  const today = new Date().toISOString().slice(0, 10);
+  if (settings?.last_daily_check_date === today) {
+    els.sidePatrolStatus.textContent = "今日巡检：已完成";
+  } else {
+    els.sidePatrolStatus.textContent = settings?.daily_check_enabled === "true"
+      ? `今日巡检：待运行 (${settings.daily_check_time || "09:30"})`
+      : "今日巡检：手动模式";
+  }
+}
+
+function renderWatchlistChips() {
+  els.watchlistCountLabel.textContent = String(state.selectedWatchlist.size);
+  els.watchlistChips.innerHTML = state.watchlist
+    .map((kw) => {
+      const active = state.selectedWatchlist.has(kw);
+      return `
+        <span class="watch-chip ${active ? "active" : ""}" data-toggle-kw="${esc(kw)}">
+          <span>${active ? "✓" : "+"} ${esc(kw)}</span>
+          <button type="button" class="chip-del" data-remove-kw="${esc(kw)}" aria-label="移除关键词">×</button>
+        </span>
+      `;
+    })
+    .join("");
+
+  els.watchlistChips.querySelectorAll("[data-toggle-kw]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-remove-kw]")) return;
+      const kw = el.dataset.toggleKw;
+      if (state.selectedWatchlist.has(kw)) {
+        if (state.selectedWatchlist.size > 1) state.selectedWatchlist.delete(kw);
+      } else {
+        state.selectedWatchlist.add(kw);
+      }
+      renderWatchlistChips();
+    });
+  });
+
+  els.watchlistChips.querySelectorAll("[data-remove-kw]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const kw = btn.dataset.removeKw;
+      if (state.watchlist.length <= 1) return;
+      state.watchlist = state.watchlist.filter((k) => k !== kw);
+      state.selectedWatchlist.delete(kw);
+      renderWatchlistChips();
+    });
+  });
 }
 
 function renderProfileSelectors() {
   const list = state.egoProfiles.length
     ? state.egoProfiles
     : (state.data?.tracks || []).map((t) => ({ id: t.profile_id, name: t.profile_name }));
-  const current = els.scrapeProfile.value || state.data?.tracks?.find((t) => t.track_key === "B")?.profile_id || "Profile 1";
-  els.scrapeProfile.innerHTML = list
-    .map((p) => `<option value="${esc(p.id)}" ${p.id === current ? "selected" : ""}>${esc(p.name)} (${esc(p.id)})</option>`)
-    .join("");
+  const current = els.scrapeMode.value || (state.data?.settings?.scan_mode === "single" ? `single:${list[0]?.id || "Profile 1"}` : "both");
+  const options = [
+    `<option value="both" ${current === "both" ? "selected" : ""}>双号分别刷一遍（去重）</option>`,
+    ...list.map((p) => {
+      const v = `single:${p.id}`;
+      return `<option value="${esc(v)}" ${current === v ? "selected" : ""}>仅用 ${esc(p.name)} (${esc(p.id)})</option>`;
+    }),
+  ];
+  els.scrapeMode.innerHTML = options.join("");
+}
+
+function adviceTagHtml(advice, score) {
+  const key = advice || "REVISE_FIRST";
+  const label = ADVICE_LABELS[key] || "待评估";
+  return `<span class="zone-tag advice-${esc(key)}">匹配 ${esc(score)} · ${esc(label)}</span>`;
 }
 
 function zoneTagHtml(zone, score) {
-  const text = zone === "SKIP" ? "SKIP" : `${zone} ${score}`;
+  const text = zone === "SKIP" ? "背调拦截 SKIP" : `背调 ${zone} ${score}`;
   return `<span class="zone-tag zone-${esc(zone)}"><span class="zone-dot" aria-hidden="true"></span>${esc(text)}</span>`;
 }
 
+function getFilteredSortedJobs() {
+  const all = state.data?.jobs || [];
+  let list = all.filter((j) => {
+    const adv = j.apply_advice || j.match?.apply_advice || "REVISE_FIRST";
+    if (state.activeFilter === "DIRECT_APPLY" && adv !== "DIRECT_APPLY") return false;
+    if (state.activeFilter === "REVISE_FIRST" && adv !== "REVISE_FIRST") return false;
+    if (state.activeFilter === "LOW_FIT" && adv !== "LOW_FIT") return false;
+    if (state.activeFilter === "RISK_SKIP" && j.zone !== "RED" && j.zone !== "SKIP") return false;
+    if (state.searchText) {
+      const hay = `${j.job_title} ${j.company_name} ${j.matched_query || ""} ${j.jd_text || ""} ${j.industry || ""}`.toLowerCase();
+      if (!hay.includes(state.searchText)) return false;
+    }
+    return true;
+  });
+
+  if (state.sortBy === "match") {
+    list = [...list].sort((a, b) => (b.match_score || 0) - (a.match_score || 0) || b.id - a.id);
+  } else if (state.sortBy === "recent") {
+    list = [...list].sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")) || b.id - a.id);
+  } else if (state.sortBy === "risk") {
+    list = [...list].sort((a, b) => (a.risk_score || 0) - (b.risk_score || 0) || (b.match_score || 0) - (a.match_score || 0));
+  }
+  return list;
+}
+
 function renderJobList() {
-  const jobs = (state.data?.jobs || []).filter((j) =>
-    state.activeZone === "ALL" ? true : j.zone === state.activeZone
-  );
+  const jobs = getFilteredSortedJobs();
   if (jobs.length === 0) {
-    els.jobListPane.innerHTML = `<div class="empty-state">当前筛选下暂无岗位。</div>`;
+    els.jobListPane.innerHTML = `<div class="empty-state">当前筛选下暂无已保存岗位。</div>`;
     return;
   }
 
-  const tracks = state.data.tracks || [];
-  const trackMap = Object.fromEntries(tracks.map((t) => [t.track_key, t]));
-
   els.jobListPane.innerHTML = jobs
     .map((j) => {
-      const effectiveKey = j.manual_track || (j.recommended_track === "A轨_真实日期版" ? "A" : j.recommended_track === "B轨_绿区池" ? "B" : null);
-      const trackInfo = effectiveKey ? trackMap[effectiveKey] : null;
-      const trackShort = j.zone === "SKIP" ? "跳过" : trackInfo ? `${effectiveKey}轨·${trackInfo.profile_name}` : "待定轨";
       const selected = j.id === state.selectedJobId;
+      const adv = j.apply_advice || j.match?.apply_advice || "REVISE_FIRST";
+      const srcTag = j.matched_query ? `${j.matched_query}` : (j.source_profile_id || "");
       return `
         <button type="button" class="job-row" role="option" aria-selected="${selected}" data-select-job="${j.id}">
           <div class="job-row-top">
             <span class="job-row-title">${esc(j.job_title)}</span>
-            <span class="job-row-salary">${esc(j.salary_range || "薪资未标")}</span>
+            <span class="job-row-salary">${esc(j.salary_range || "面议")}</span>
           </div>
-          <div class="job-row-sub">${esc(j.company_name)} · ${esc(j.scale || "规模未知")} · ${esc(j.recruiter_active || j.recruiter_title || "")}</div>
+          <div class="job-row-sub">${esc(j.company_name)} · ${esc(j.scale || "规模未知")} · ${esc(j.recruiter_active || j.recruiter_title || "未知")}</div>
           <div class="job-row-meta">
+            ${adviceTagHtml(adv, j.match_score || 0)}
             ${zoneTagHtml(j.zone, j.risk_score)}
-            <span class="meta-pill">${esc(trackShort)}</span>
-            <span class="meta-pill">匹配 ${esc(j.match_score)}%</span>
+            ${srcTag ? `<span class="meta-pill">${esc(srcTag)}</span>` : ""}
             <span class="muted" style="margin-left:auto;">${esc(STATUS_LABELS[j.status] || j.status)}</span>
           </div>
         </button>
@@ -284,111 +423,181 @@ function renderJobList() {
     .join("");
 
   els.jobListPane.querySelectorAll("[data-select-job]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
+    btn.addEventListener("click", () => {
       state.selectedJobId = Number(btn.dataset.selectJob);
       renderJobList();
-      await renderInspector(true);
+      renderInspector(true);
     });
   });
 }
 
 async function renderInspector(fetchFresh = false) {
-  const id = state.selectedJobId;
-  if (!id || !state.data?.jobs?.some((j) => j.id === id)) {
-    els.jobInspectorPane.innerHTML = `<div class="empty-state">在左侧选择一个岗位，查看风控拆解、背调舆情、事实锁 Diff 并执行分号投递。</div>`;
+  if (!state.selectedJobId) {
+    els.jobInspectorPane.innerHTML = `<div class="empty-state">在左侧选择一个已保存岗位，查看 5 维度匹配打分、可否直投诊断、背调风险、沟通模板并一键跳转沟通页。</div>`;
     return;
   }
 
-  const job = fetchFresh ? await api(`/api/jobs/${id}`) : state.data.jobs.find((j) => j.id === id);
-  if (!job) return;
+  let job = (state.data?.jobs || []).find((j) => j.id === state.selectedJobId);
+  if (!job) {
+    const visible = getFilteredSortedJobs();
+    if (visible.length > 0) {
+      state.selectedJobId = visible[0].id;
+      job = visible[0];
+    } else {
+      els.jobInspectorPane.innerHTML = `<div class="empty-state">请选择左侧岗位。</div>`;
+      return;
+    }
+  }
 
-  const tracks = state.data.tracks || [];
-  const effectiveKey = job.manual_track || (job.recommended_track === "A轨_真实日期版" ? "A" : job.recommended_track === "B轨_绿区池" ? "B" : "");
-  const conflict = (job.company_history || []).find((h) => effectiveKey && h.track_key !== effectiveKey);
+  if (fetchFresh) {
+    try {
+      job = await api(`/api/jobs/${job.id}`);
+    } catch {}
+  }
+
+  const tracks = state.data?.tracks || [];
+  const profilePool = state.egoProfiles.length
+    ? state.egoProfiles
+    : tracks.map((t) => ({ id: t.profile_id, name: t.profile_name }));
+  const preferredProfile = job.assigned_profile_id || job.source_profile_id || profilePool[0]?.id || "Profile 1";
+
+  const matchObj = job.match || {};
+  const dims = matchObj.dimensions || {};
+  const dimList = [
+    dims.work_content || { score: Math.round((job.match_score || 0) * 0.35), max: 35, label: "工作内容重合" },
+    dims.tech_stack || { score: Math.round((job.match_score || 0) * 0.25), max: 25, label: "技能栈命中" },
+    dims.role_alignment || { score: Math.round((job.match_score || 0) * 0.15), max: 15, label: "岗位方向契合" },
+    dims.hard_gate || { score: Math.round((job.match_score || 0) * 0.15), max: 15, label: "资历门槛" },
+    dims.project_context || { score: Math.round((job.match_score || 0) * 0.1), max: 10, label: "项目场景相关" },
+  ];
+
+  const applyAdvice = job.apply_advice || matchObj.apply_advice || "REVISE_FIRST";
+  const adviceLabel = matchObj.advice_label || ADVICE_LABELS[applyAdvice] || "建议微调后投";
+  const adviceSummary = matchObj.advice_summary || "请结合下方命中关键词与缺失必需项判断是否直接投递。";
+  const reviseSuggestions = matchObj.revise_suggestions || [];
+  const templates = Array.isArray(matchObj.greeting_templates) ? matchObj.greeting_templates : [];
+
   const tailored = job.tailored_resume || {};
   const factGuard = tailored.fact_guard || { passed: true, issues: [] };
   const snippets = job.intel?.snippets || [];
+  const conflict = (job.company_history || []).find((h) => h.profile_id !== preferredProfile);
 
   els.jobInspectorPane.innerHTML = `
     <div class="inspector-head">
       <div>
         <h2 class="inspector-title">${esc(job.job_title)} · ${esc(job.company_name)}</h2>
-        <p class="inspector-sub">${esc(job.salary_range || "薪资未标")} · ${esc(job.scale || "规模未知")} · ${esc(job.financing || "融资未知")} · ${esc(job.industry || "行业未知")} · ${esc(job.recruiter_title || "招聘人")} (${esc(job.recruiter_active || "活跃度未知")})</p>
+        <p class="inspector-sub">
+          ${esc(job.salary_range || "薪资未标")} · ${esc(job.experience_req || "经验不限")} · ${esc(job.education_req || "学历不限")} · ${esc(job.scale || "规模未知")} · ${esc(job.financing || "融资未知")} · ${esc(job.recruiter_title || "招聘人")} (${esc(job.recruiter_active || "活跃未知")})
+        </p>
       </div>
       <div class="inspector-controls">
+        ${adviceTagHtml(applyAdvice, job.match_score || 0)}
         ${zoneTagHtml(job.zone, job.risk_score)}
-        <button type="button" class="btn btn-ghost btn-xs" id="insp-ban-btn">拉黑公司</button>
+        <button type="button" class="btn btn-secondary btn-xs" id="insp-open-page">Ego 打开</button>
+        <button type="button" class="btn btn-ghost btn-xs" id="insp-ban-btn">拉黑</button>
       </div>
     </div>
 
     ${job.blacklisted ? `<div class="conflict-alert">黑名单拦截：${esc(job.blacklisted.company_name)}（${esc(job.blacklisted.reason)}）</div>` : ""}
-    ${conflict ? `<div class="conflict-alert">防撞车警告：该公司/关联主体此前已用 ${esc(conflict.track_key)}轨 (${esc(conflict.profile_id)}) 投递过，禁止再用另一账号重复投递！</div>` : ""}
+    ${conflict ? `<div class="conflict-alert">防撞车提醒：公司「${esc(job.company_name)}」近期曾用 ${esc(conflict.profile_id)} 沟通过，请确认是否继续跳转。</div>` : ""}
 
     <div class="inspector-tabs" role="tablist" aria-label="岗位详情视图">
-      <button type="button" role="tab" id="itab-match" aria-selected="${state.inspectorTab === "match"}">匹配改写与投递</button>
-      <button type="button" role="tab" id="itab-risk" aria-selected="${state.inspectorTab === "risk"}">风控拆解与背调舆情</button>
-      <button type="button" role="tab" id="itab-jd" aria-selected="${state.inspectorTab === "jd"}">原始 JD</button>
+      <button type="button" role="tab" id="itab-match" aria-selected="${state.inspectorTab === "match"}">匹配打分与直达沟通</button>
+      <button type="button" role="tab" id="itab-risk" aria-selected="${state.inspectorTab === "risk"}">背调风控与舆情</button>
+      <button type="button" role="tab" id="itab-jd" aria-selected="${state.inspectorTab === "jd"}">完整 JD 与个人备注</button>
     </div>
 
     <div role="tabpanel" aria-labelledby="itab-match" ${state.inspectorTab === "match" ? "" : "hidden"}>
       <div class="panel-inner">
+        <div class="dim-grid">
+          ${dimList
+            .map((d) => {
+              const pct = d.max > 0 ? Math.min(100, Math.round((d.score / d.max) * 100)) : 0;
+              return `
+                <div class="dim-card" title="${esc(d.note || "")}">
+                  <div class="dim-top">
+                    <span class="dim-label">${esc(d.label)}</span>
+                    <span class="dim-score">${esc(d.score)}/${esc(d.max)}</span>
+                  </div>
+                  <div class="dim-bar"><div class="dim-bar-fill" style="width:${pct}%"></div></div>
+                </div>
+              `;
+            })
+            .join("")}
+        </div>
+
+        <div class="verdict-box">
+          <div class="verdict-head">
+            <div>
+              <strong>投递诊断：${esc(adviceLabel)}（总分 ${esc(job.match_score || 0)}/100）</strong>
+              <span class="meta-pill" style="margin-left:6px;">${factGuard.passed ? "2年事实锁通过" : "事实锁异常"}</span>
+            </div>
+            <button type="button" class="btn btn-secondary btn-xs" id="insp-recalc-btn">按当前2年简历重算</button>
+          </div>
+          <div class="muted">${esc(adviceSummary)}</div>
+          <div style="font-size:12px;">
+            <strong>命中工作点：</strong>${esc((matchObj.matched_keywords || []).join("、") || "基础软件测试")}
+            ${matchObj.missing_must_haves?.length ? `<span style="margin-left:10px;color:var(--yellow-fg);"><strong>JD必需但简历较弱：</strong>${esc(matchObj.missing_must_haves.join("、"))}</span>` : ""}
+          </div>
+          ${reviseSuggestions.length ? `<ul class="evidence-list">${reviseSuggestions.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>` : ""}
+        </div>
+
         <div class="form-grid">
           <label class="field">
-            <span>投递轨道 / Ego 账号</span>
-            <select id="insp-track-select">
-              <option value="">-- 请定轨（当前未定轨/跳过） --</option>
-              ${tracks.map((t) => `<option value="${esc(t.track_key)}" ${effectiveKey === t.track_key ? "selected" : ""}>${esc(t.track_label)} → ${esc(t.profile_name)} (${esc(t.profile_id)})</option>`).join("")}
+            <span>跳转沟通所用 Ego 账号</span>
+            <select id="insp-profile-select">
+              ${profilePool.map((p) => `<option value="${esc(p.id)}" ${p.id === preferredProfile ? "selected" : ""}>${esc(p.name)} (${esc(p.id)})</option>`).join("")}
             </select>
           </label>
           <label class="field">
-            <span>沟通状态</span>
+            <span>投递跟进状态</span>
             <select id="insp-status-select">
               ${Object.entries(STATUS_LABELS).map(([k, v]) => `<option value="${esc(k)}" ${job.status === k ? "selected" : ""}>${esc(v)}</option>`).join("")}
             </select>
           </label>
         </div>
 
-        <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;">
-          <div style="font-size:12.5px;">
-            <strong>人岗匹配 ${esc(job.match_score)}%</strong>
-            <span class="muted" style="margin-left:8px;">命中：${esc((job.match?.matched_keywords || []).join("、") || "基础匹配")}</span>
-          </div>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <span class="zone-tag ${factGuard.passed ? "zone-GREEN" : "zone-RED"}">${factGuard.passed ? "事实锁通过" : "事实锁异常"}</span>
-            <button type="button" class="btn btn-secondary btn-xs" id="insp-recalc-btn">按所选轨道重算</button>
-          </div>
-        </div>
-
         <details>
-          <summary class="muted" style="cursor:pointer;">原文 vs 动态优化摘要 Diff 对比</summary>
+          <summary class="muted" style="cursor:pointer;">2年主简历原文 vs 本岗动态微调 Diff 对比</summary>
           <div class="diff-grid" style="margin-top:8px;">
             <div>
-              <span class="muted">母版原文：</span>
-              <div class="code-box">${esc(tailored.original_summary || "尚未同步或无摘要")}</div>
+              <span class="muted">2年母版原文：</span>
+              <div class="code-box">${esc(tailored.original_summary || "尚未同步2年经历主简历")}</div>
             </div>
             <div>
-              <span class="muted">动态适配：</span>
+              <span class="muted">针对本岗侧重优化：</span>
               <div class="code-box">${esc(tailored.tailored_summary || "")}</div>
             </div>
           </div>
         </details>
 
         <label class="field">
-          <span>动态微调后的简历优势侧重点（用于导出定制 PDF）</span>
+          <span>定制优势摘要（仅微调侧重点，导出定制 PDF 后发送给 HR）</span>
           <textarea id="insp-tailored-summary" rows="3">${esc(tailored.tailored_summary || "")}</textarea>
         </label>
 
-        <label class="field">
-          <span>专属打招呼话术（<strong id="insp-greeting-len">${(job.custom_greeting || "").length}</strong> / 120 字）</span>
+        <div class="stack-sm">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">
+            <span style="font-size:12px;font-weight:600;color:var(--text-muted);">预测沟通话术模板（点击切换 · <strong id="insp-greeting-len">${(job.custom_greeting || "").length}</strong> / 120 字）</span>
+            <div class="template-chips">
+              ${templates
+                .map(
+                  (t, idx) =>
+                    `<button type="button" class="tpl-btn ${t.text === job.custom_greeting ? "active" : ""}" data-tpl-idx="${idx}">${esc(t.label)}</button>`
+                )
+                .join("")}
+              <button type="button" class="btn btn-ghost btn-xs" id="insp-copy-greeting">复制话术</button>
+            </div>
+          </div>
           <textarea id="insp-greeting" rows="3" maxlength="120">${esc(job.custom_greeting || "")}</textarea>
-        </label>
+        </div>
 
         <div class="right-row">
-          <button type="button" class="btn btn-secondary btn-sm" id="insp-export-pdf">导出真 PDF 附件</button>
-          <a class="btn btn-ghost btn-sm" href="/resume-print.html?jobId=${job.id}&track=${esc(effectiveKey || "B")}" target="_blank">打印预览</a>
+          <button type="button" class="btn btn-secondary btn-sm" id="insp-export-pdf">导出2年定制 PDF</button>
+          <a class="btn btn-ghost btn-sm" href="/resume-print.html?jobId=${job.id}&track=${esc(state.data?.settings?.primary_resume_track || "A")}" target="_blank">打印预览</a>
           <button type="button" class="btn btn-secondary btn-sm" id="insp-save-btn">保存修改</button>
-          <button type="button" class="btn btn-primary btn-sm" id="insp-deliver-prefill" ${conflict || job.blacklisted ? "disabled" : ""}>在 Ego 预填话术（推荐）</button>
-          <button type="button" class="btn btn-ghost btn-sm" id="insp-deliver-auto" ${conflict || job.blacklisted ? "disabled" : ""}>直接发送</button>
+          <button type="button" class="btn btn-primary btn-sm" id="insp-deliver-prefill" ${job.blacklisted ? "disabled" : ""}>跳转 Boss 沟通页（预填话术）</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="insp-deliver-auto" ${job.blacklisted ? "disabled" : ""}>直接发送</button>
         </div>
       </div>
     </div>
@@ -397,7 +606,7 @@ async function renderInspector(fetchFresh = false) {
       <div class="panel-inner">
         <div class="surface-box">
           <div style="display:flex;justify-content:space-between;align-items:center;">
-            <strong>评分明细（基础 10 分，上限 100）</strong>
+            <strong>背调风险辅助评估（${esc(job.zone)} · ${esc(job.risk_score)} 分）</strong>
             <button type="button" class="btn btn-secondary btn-xs" id="insp-refresh-intel">重新联网补查</button>
           </div>
           <ul class="evidence-list">
@@ -411,7 +620,19 @@ async function renderInspector(fetchFresh = false) {
 
     <div role="tabpanel" aria-labelledby="itab-jd" ${state.inspectorTab === "jd" ? "" : "hidden"}>
       <div class="panel-inner">
-        <div class="code-box" style="max-height:420px;">${esc(job.jd_text || "无 JD 文本")}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span class="muted">来源：${esc(job.matched_query || "手动导入")} · 采集账号：${esc(job.source_profile_id || "未知")} · 保存时间：${esc(fmtTime(job.updated_at || job.created_at))}</span>
+          ${job.job_url ? `<a class="btn btn-ghost btn-xs" href="${esc(job.job_url)}" target="_blank" rel="noreferrer">浏览器查看链接</a>` : ""}
+        </div>
+        <div class="code-box" style="max-height:360px;">${esc(job.jd_text || "无 JD 文本")}</div>
+        ${job.company_intro ? `<details><summary class="muted" style="cursor:pointer;">公司简介</summary><div class="code-box" style="margin-top:6px;">${esc(job.company_intro)}</div></details>` : ""}
+        <label class="field">
+          <span>个人跟进笔记</span>
+          <textarea id="insp-notes" rows="3" placeholder="记录面试反馈、HR回复情况、背调确认结果...">${esc(job.notes || "")}</textarea>
+        </label>
+        <div class="right-row">
+          <button type="button" class="btn btn-secondary btn-xs" id="insp-save-notes">保存笔记</button>
+        </div>
       </div>
     </div>
   `;
@@ -431,6 +652,44 @@ async function renderInspector(fetchFresh = false) {
   const lenEl = document.getElementById("insp-greeting-len");
   greetingEl.addEventListener("input", () => { lenEl.textContent = greetingEl.value.length; });
 
+  els.jobInspectorPane.querySelectorAll("[data-tpl-idx]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const idx = Number(btn.dataset.tplIdx);
+      const tpl = templates[idx];
+      if (!tpl) return;
+      greetingEl.value = tpl.text;
+      lenEl.textContent = tpl.text.length;
+      els.jobInspectorPane.querySelectorAll("[data-tpl-idx]").forEach((x) => x.classList.remove("active"));
+      btn.classList.add("active");
+    });
+  });
+
+  document.getElementById("insp-copy-greeting").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(greetingEl.value);
+      els.liveLogLatest.textContent = "已复制沟通话术到剪贴板";
+    } catch {
+      greetingEl.select();
+      document.execCommand("copy");
+    }
+  });
+
+  document.getElementById("insp-open-page").addEventListener("click", async () => {
+    const profileId = document.getElementById("insp-profile-select").value;
+    setWorkerBusy(true, `正在使用 ${profileId} 打开岗位详情页...`);
+    try {
+      const res = await api(`/api/jobs/${job.id}/open`, {
+        method: "POST",
+        body: JSON.stringify({ profileId }),
+      });
+      alert(`${res.open?.message || "已在 Ego 打开原网页"}`);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setWorkerBusy(false);
+    }
+  });
+
   document.getElementById("insp-ban-btn").addEventListener("click", async () => {
     if (!confirm(`确定将「${job.company_name}」加入避坑黑名单吗？`)) return;
     await api("/api/blacklist", { method: "POST", body: JSON.stringify({ company_name: job.company_name, reason: "工作台拉黑" }) });
@@ -449,15 +708,15 @@ async function renderInspector(fetchFresh = false) {
   });
 
   document.getElementById("insp-recalc-btn").addEventListener("click", async () => {
-    const trackKey = document.getElementById("insp-track-select").value || undefined;
-    await api(`/api/jobs/${job.id}/evaluate`, { method: "POST", body: JSON.stringify({ trackKey }) });
+    const profileId = document.getElementById("insp-profile-select").value;
+    await api(`/api/jobs/${job.id}/evaluate`, { method: "POST", body: JSON.stringify({ profileId }) });
     await refreshState();
     await renderInspector(true);
   });
 
   document.getElementById("insp-export-pdf").addEventListener("click", async () => {
-    const trackKey = document.getElementById("insp-track-select").value || effectiveKey || "B";
-    setWorkerBusy(true, "正在渲染定制 PDF...");
+    const trackKey = state.data?.settings?.primary_resume_track || "A";
+    setWorkerBusy(true, "正在渲染 2 年定制 PDF...");
     try {
       const res = await api(`/api/jobs/${job.id}/pdf`, { method: "POST", body: JSON.stringify({ trackKey }) });
       window.open(res.download_url, "_blank");
@@ -469,14 +728,16 @@ async function renderInspector(fetchFresh = false) {
   });
 
   document.getElementById("insp-save-btn").addEventListener("click", async () => {
-    const trackKey = document.getElementById("insp-track-select").value || null;
+    const profileId = document.getElementById("insp-profile-select").value;
     const status = document.getElementById("insp-status-select").value;
     const tailoredSummary = document.getElementById("insp-tailored-summary").value.trim();
+    const notes = document.getElementById("insp-notes")?.value ?? job.notes;
     await api(`/api/jobs/${job.id}`, {
       method: "PATCH",
       body: JSON.stringify({
-        manual_track: trackKey,
+        assigned_profile_id: profileId,
         status,
+        notes,
         custom_greeting: greetingEl.value.trim(),
         tailored_resume: { ...tailored, tailored_summary: tailoredSummary },
       }),
@@ -484,22 +745,33 @@ async function renderInspector(fetchFresh = false) {
     await refreshState();
   });
 
+  document.getElementById("insp-save-notes")?.addEventListener("click", async () => {
+    const notes = document.getElementById("insp-notes").value;
+    await api(`/api/jobs/${job.id}`, { method: "PATCH", body: JSON.stringify({ notes }) });
+    await refreshState();
+    els.liveLogLatest.textContent = "已保存个人跟进笔记";
+  });
+
   const handleDeliver = async (autoSend) => {
-    const trackKey = document.getElementById("insp-track-select").value;
-    if (!trackKey) return alert("请先选择使用 A轨 还是 B轨 账号后再投递！");
-    if (autoSend && !confirm("确认自动点击发送吗？建议优先用预填模式扫一眼再发。")) return;
-    setWorkerBusy(true, `正在用 ${trackKey}轨 账号准备投递`);
+    const profileId = document.getElementById("insp-profile-select").value;
+    if (autoSend && !confirm("确认直接发送打招呼消息吗？建议优先用「跳转 Boss 沟通页」确认后再点发送及附件简历。")) return;
+    setWorkerBusy(true, `正在用 ${profileId} 跳转到 Boss 沟通页`);
     try {
       const res = await api(`/api/jobs/${job.id}/deliver`, {
         method: "POST",
-        body: JSON.stringify({ trackKey, greetingText: greetingEl.value.trim(), autoSend }),
+        body: JSON.stringify({
+          profileId,
+          greetingText: greetingEl.value.trim(),
+          autoSend,
+          forceCrossTrack: Boolean(conflict),
+        }),
       });
       if (res.status === "VERIFICATION_REQUIRED") {
         showVerifyBanner(res);
       } else if (res.delivery?.status === "PREPARED_HANDOFF") {
-        alert(`${res.delivery.message}\n请在 Ego 浏览器窗口确认发送（TaskSpace #${res.delivery.taskSpaceId}）。`);
+        alert(`${res.delivery.message}\n请在 Ego 浏览器窗口确认发送话术与附件简历（TaskSpace #${res.delivery.taskSpaceId}）。`);
       } else {
-        alert("已完成投递！");
+        alert("已发送沟通！");
       }
       await refreshState();
     } catch (err) {
@@ -513,45 +785,64 @@ async function renderInspector(fetchFresh = false) {
   document.getElementById("insp-deliver-auto").addEventListener("click", () => handleDeliver(true));
 }
 
-function renderResumes() {
-  const { resumes, tracks } = state.data;
-  const trackMap = Object.fromEntries(tracks.map((t) => [t.track_key, t]));
-  els.resumesGrid.innerHTML = resumes
-    .map((r) => {
-      const tr = trackMap[r.track_key] || {};
-      return `
-        <article class="surface-box" data-resume-track="${esc(r.track_key)}">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
-            <div>
-              <h3>${esc(tr.track_label || r.track_key + "轨")}</h3>
-              <p class="muted">绑定：${esc(tr.profile_name)} (${esc(tr.profile_id)}) · 同步：${esc(r.synced_at ? fmtTime(r.synced_at) : "未同步")}</p>
-            </div>
-            <button type="button" class="btn btn-secondary btn-xs" data-sync-resume="${esc(r.track_key)}">从 Ego 同步简历</button>
-          </div>
-          <div class="form-grid">
-            <label class="field"><span>候选人名称</span><input type="text" data-field="candidate_name" value="${esc(r.candidate_name)}"></label>
-            <label class="field"><span>经验标签</span><input type="text" data-field="years_label" value="${esc(r.years_label)}"></label>
-          </div>
-          <label class="field"><span>个人优势摘要</span><textarea rows="4" data-field="summary">${esc(r.summary)}</textarea></label>
-          <label class="field"><span>核心技能（逗号分隔）</span><input type="text" data-field="skills" value="${esc((r.skills || []).join(", "))}"></label>
-          <label class="field"><span>工作经历 JSON</span><textarea rows="5" data-field="experiences_json">${esc(JSON.stringify(r.experiences || [], null, 2))}</textarea></label>
-          <label class="field"><span>项目经历 JSON</span><textarea rows="4" data-field="projects_json">${esc(JSON.stringify(r.projects || [], null, 2))}</textarea></label>
-          <div class="right-row">
-            <a class="btn btn-ghost btn-xs" href="/resume-print.html?track=${esc(r.track_key)}" target="_blank">预览基础版</a>
-            <button type="button" class="btn btn-primary btn-xs" data-save-resume="${esc(r.track_key)}">保存母版</button>
-          </div>
-        </article>
-      `;
-    })
-    .join("");
+function renderResumeCardHtml(r, title, profilesList, isPrimary) {
+  return `
+    <article class="surface-box" data-resume-track="${esc(r.track_key)}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+        <div>
+          <h3>${esc(title)}</h3>
+          <p class="muted">当前绑定：${esc(r.years_label || "2年经验")} · 最近同步：${esc(r.synced_at ? fmtTime(r.synced_at) : "未同步")}</p>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <select class="input-compact" data-sync-profile="${esc(r.track_key)}" aria-label="选择从哪个Ego账号同步">
+            ${profilesList.map((p) => `<option value="${esc(p.id)}" ${p.id === (isPrimary ? "Profile 2" : "Profile 1") ? "selected" : ""}>从 ${esc(p.name)} (${esc(p.id)}) 同步</option>`).join("")}
+          </select>
+          <button type="button" class="btn btn-secondary btn-xs" data-sync-resume="${esc(r.track_key)}">读取线上简历</button>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label class="field"><span>候选人名称</span><input type="text" data-field="candidate_name" value="${esc(r.candidate_name)}"></label>
+        <label class="field"><span>经验年限标签</span><input type="text" data-field="years_label" value="${esc(r.years_label)}"></label>
+      </div>
+      <label class="field"><span>个人优势摘要</span><textarea rows="4" data-field="summary">${esc(r.summary)}</textarea></label>
+      <label class="field"><span>核心技能（逗号分隔）</span><input type="text" data-field="skills" value="${esc((r.skills || []).join(", "))}"></label>
+      <label class="field"><span>工作经历 JSON（事实锁受保护字段）</span><textarea rows="7" data-field="experiences_json">${esc(JSON.stringify(r.experiences || [], null, 2))}</textarea></label>
+      <label class="field"><span>项目经历 JSON</span><textarea rows="6" data-field="projects_json">${esc(JSON.stringify(r.projects || [], null, 2))}</textarea></label>
+      <div class="right-row">
+        <a class="btn btn-ghost btn-xs" href="/resume-print.html?track=${esc(r.track_key)}" target="_blank">预览打印版</a>
+        <button type="button" class="btn btn-primary btn-xs" data-save-resume="${esc(r.track_key)}">保存简历母版</button>
+      </div>
+    </article>
+  `;
+}
 
-  els.resumesGrid.querySelectorAll("[data-sync-resume]").forEach((btn) => {
+function renderResumes() {
+  const { resumes, tracks, settings } = state.data;
+  const primaryKey = settings?.primary_resume_track || "A";
+  const primary = resumes.find((r) => r.track_key === primaryKey) || resumes[0];
+  const secondary = resumes.find((r) => r.track_key !== primary?.track_key);
+  const profilesList = state.egoProfiles.length
+    ? state.egoProfiles
+    : tracks.map((t) => ({ id: t.profile_id, name: t.profile_name }));
+
+  els.resumesContainer.innerHTML =
+    (primary ? renderResumeCardHtml(primary, "统一评估主简历（2年经历版）", profilesList, true) : "") +
+    (secondary
+      ? `<details class="surface-box"><summary class="muted" style="cursor:pointer;">展开备用/历史简历素材（${esc(secondary.years_label || secondary.track_key)}）</summary><div style="margin-top:12px;">${renderResumeCardHtml(secondary, `备用素材 (${secondary.track_key})`, profilesList, false)}</div></details>`
+      : "");
+
+  els.resumesContainer.querySelectorAll("[data-sync-resume]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const key = btn.dataset.syncResume;
+      const card = btn.closest("[data-resume-track]");
+      const profileId = card.querySelector(`[data-sync-profile="${key}"]`)?.value;
       btn.disabled = true;
-      setWorkerBusy(true, `正在从 Ego 读取 ${key} 轨简历`);
+      setWorkerBusy(true, `正在从 ${profileId || "Ego"} 读取线上简历...`);
       try {
-        const res = await api(`/api/resumes/${key}/sync`, { method: "POST" });
+        const res = await api(`/api/resumes/${key}/sync`, {
+          method: "POST",
+          body: JSON.stringify({ profileId }),
+        });
         if (res.status === "VERIFICATION_REQUIRED") showVerifyBanner(res);
         await refreshState();
       } catch (err) {
@@ -563,7 +854,7 @@ function renderResumes() {
     });
   });
 
-  els.resumesGrid.querySelectorAll("[data-save-resume]").forEach((btn) => {
+  els.resumesContainer.querySelectorAll("[data-save-resume]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const key = btn.dataset.saveResume;
       const card = btn.closest("[data-resume-track]");
@@ -578,7 +869,7 @@ function renderResumes() {
         };
         await api(`/api/resumes/${key}`, { method: "POST", body: JSON.stringify(payload) });
         await refreshState();
-        alert(`已保存 ${key} 轨简历母版`);
+        alert("已保存 2年经历主简历母版！建议点击右上角重算全部岗位评分。");
       } catch (err) {
         alert(`保存失败：${err.message}`);
       }
@@ -589,18 +880,25 @@ function renderResumes() {
 function renderFunnel() {
   const f = state.data?.funnel;
   if (!f) return;
-  const card = (label, d) => `
+  const replyRate = f.delivered > 0 ? Math.round((f.replied / f.delivered) * 100) : 0;
+  const ivRate = f.delivered > 0 ? Math.round((f.interviews / f.delivered) * 100) : 0;
+  els.funnelCards.innerHTML = `
     <div class="funnel-card">
-      <strong>${esc(label)}</strong>
-      <div class="muted">岗位 ${esc(d.total)} · 预填/发送 ${esc(d.prepared_or_sent)}</div>
-      <div class="muted">实投 ${esc(d.delivered)} · 回复 ${esc(d.replied)} (${esc(d.reply_rate)}%)</div>
-      <div class="muted">约面 ${esc(d.interviews)} (${esc(d.interview_rate)}%)</div>
+      <strong>已保存岗位池</strong>
+      <div class="muted">共保存 ${esc(f.total_jobs)} 条</div>
+      <div class="muted">黑名单/引流拦截 ${esc(f.skipped)} 条</div>
+    </div>
+    <div class="funnel-card">
+      <strong>匹配决策分布</strong>
+      <div class="muted">可直接投：${esc(f.direct_apply ?? 0)} 条</div>
+      <div class="muted">改后投：${esc(f.revise_first ?? 0)} 条 · 偏低：${esc(f.low_fit ?? 0)} 条</div>
+    </div>
+    <div class="funnel-card">
+      <strong>沟通转化统计</strong>
+      <div class="muted">实投 ${esc(f.delivered ?? 0)} · 回复 ${esc(f.replied ?? 0)} (${replyRate}%)</div>
+      <div class="muted">约面 ${esc(f.interviews ?? 0)} (${ivRate}%)</div>
     </div>
   `;
-  els.funnelCards.innerHTML =
-    card("A轨_真实日期版", f.A) +
-    card("B轨_绿区池", f.B) +
-    `<div class="funnel-card"><strong>反诈 / 黑名单拦截</strong><div class="muted">已跳过 ${esc(f.skipped)} / ${esc(f.total_jobs)} 条</div></div>`;
 }
 
 function renderBlacklist() {
@@ -628,12 +926,12 @@ function renderSettings() {
 
   els.tracksConfigList.innerHTML = tracks
     .map(
-      (t) => `
+      (t, idx) => `
       <div class="log-item">
         <div class="form-grid">
           <div class="field">
-            <span>轨道 ${t.breaker_active ? '<strong style="color:var(--red-fg)">(今日熔断中)</strong>' : ""}</span>
-            <input type="text" value="${esc(t.track_label)}" disabled>
+            <span>账号槽位 ${idx + 1} ${t.breaker_active ? '<strong style="color:var(--red-fg)">(今日熔断中)</strong>' : ""}</span>
+            <input type="text" value="${esc(t.profile_name)}" data-track-name="${esc(t.track_key)}">
           </div>
           <label class="field">
             <span>绑定 Ego Profile</span>
@@ -659,11 +957,16 @@ function renderSettings() {
     btn.addEventListener("click", async () => {
       const k = btn.dataset.saveTrack;
       const sel = els.tracksConfigList.querySelector(`[data-track-profile="${k}"]`);
+      const nameInput = els.tracksConfigList.querySelector(`[data-track-name="${k}"]`);
       const opt = sel.selectedOptions[0];
       const limit = Number(els.tracksConfigList.querySelector(`[data-track-limit="${k}"]`).value) || 25;
       await api(`/api/tracks/${k}`, {
         method: "POST",
-        body: JSON.stringify({ profile_id: sel.value, profile_name: opt?.dataset?.name || sel.value, daily_limit: limit }),
+        body: JSON.stringify({
+          profile_id: sel.value,
+          profile_name: nameInput.value.trim() || opt?.dataset?.name || sel.value,
+          daily_limit: limit,
+        }),
       });
       await refreshState();
     });
@@ -677,6 +980,10 @@ function renderSettings() {
   });
 
   const form = els.settingsForm;
+  form.watchlist_text.value = state.watchlist.join("、");
+  form.daily_check_enabled.value = settings.daily_check_enabled || "true";
+  form.daily_check_time.value = settings.daily_check_time || "09:30";
+  form.scan_mode.value = settings.scan_mode === "single" ? "single" : "both";
   form.delay_min_ms.value = settings.delay_min_ms || "4500";
   form.delay_max_ms.value = settings.delay_max_ms || "8500";
   form.auto_web_search.value = settings.auto_web_search || "true";
@@ -691,18 +998,37 @@ function renderSettings() {
 function renderDeliveryLogs() {
   const logs = state.data?.logs || [];
   if (logs.length === 0) {
-    els.deliveryLogsList.innerHTML = `<p class="muted">暂无投递记录。</p>`;
+    els.deliveryLogsList.innerHTML = `<p class="muted">暂无沟通记录。</p>`;
     return;
   }
   els.deliveryLogsList.innerHTML = logs
     .map((l) => `
       <div class="log-item">
-        <strong>${esc(l.company_name)}</strong> · ${esc(l.track_key)}轨 (${esc(l.profile_id)}) · <span class="meta-pill">${esc(l.status)}</span>
+        <strong>${esc(l.company_name)}</strong> · ${esc(l.profile_id)} · <span class="meta-pill">${esc(l.status)}</span>
         <div class="muted">${esc(fmtTime(l.created_at))} — ${esc(l.detail)}</div>
       </div>
     `)
     .join("");
 }
+
+// Watchlist drawer handlers
+els.btnAddWatchlist.addEventListener("click", () => {
+  const kw = els.newWatchlistKw.value.trim();
+  if (!kw) return;
+  if (!state.watchlist.includes(kw)) state.watchlist.push(kw);
+  state.selectedWatchlist.add(kw);
+  els.newWatchlistKw.value = "";
+  renderWatchlistChips();
+});
+
+els.btnSaveWatchlist.addEventListener("click", async () => {
+  await api("/api/settings", {
+    method: "POST",
+    body: JSON.stringify({ watchlist_keywords: JSON.stringify(state.watchlist) }),
+  });
+  await refreshState();
+  els.liveLogLatest.textContent = `已保存 ${state.watchlist.length} 类目标岗位到每日巡检清单`;
+});
 
 // GitHub Update Flow
 async function checkUpdates({ openModal = false, silent = false } = {}) {
@@ -760,9 +1086,47 @@ els.btnApplyUpdate.addEventListener("click", async () => {
   }
 });
 
-// Actions
+// Actions: Daily Multi-Keyword Patrol & Single Keyword Scrape & Re-score
+els.btnPatrol.addEventListener("click", async () => {
+  const keywords = [...state.selectedWatchlist];
+  if (keywords.length === 0) return alert("请至少勾选 1 个目标岗位关键词");
+  const modeVal = els.scrapeMode.value;
+  const isSingle = modeVal.startsWith("single:");
+  const scanMode = isSingle ? "single" : "both";
+  const profileId = isSingle ? modeVal.slice("single:".length) : undefined;
+
+  setWorkerBusy(true, `正在低速巡检 ${keywords.length} 类岗位...`);
+  try {
+    const res = await api("/api/jobs/patrol", {
+      method: "POST",
+      body: JSON.stringify({
+        keywords,
+        city: els.scrapeCity.value,
+        minHrActive: els.scrapeHrActive.value,
+        maxPerKeyword: Number(els.scrapeMax.value) || 5,
+        scanMode,
+        profileId,
+      }),
+    });
+    if (res.status === "VERIFICATION_REQUIRED") {
+      showVerifyBanner(res);
+    } else {
+      els.liveLogLatest.textContent = res.summary || `巡检完成，新增/更新 ${res.savedCount} 条岗位`;
+    }
+    await refreshState();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    setWorkerBusy(false);
+  }
+});
+
 els.btnScrape.addEventListener("click", async () => {
-  setWorkerBusy(true, "正在低速拟人采集...");
+  const modeVal = els.scrapeMode.value;
+  const profileId = modeVal.startsWith("single:")
+    ? modeVal.slice("single:".length)
+    : (state.egoProfiles[0]?.id || "Profile 1");
+  setWorkerBusy(true, "正在低速采集单关键词...");
   try {
     const res = await api("/api/jobs/scrape", {
       method: "POST",
@@ -770,8 +1134,8 @@ els.btnScrape.addEventListener("click", async () => {
         query: els.scrapeQuery.value.trim() || "AI测试",
         city: els.scrapeCity.value,
         minHrActive: els.scrapeHrActive.value,
-        maxJobs: Number(els.scrapeMax.value) || 8,
-        profileId: els.scrapeProfile.value,
+        maxJobs: Number(els.scrapeMax.value) || 5,
+        profileId,
       }),
     });
     if (res.status === "VERIFICATION_REQUIRED") showVerifyBanner(res);
@@ -782,6 +1146,22 @@ els.btnScrape.addEventListener("click", async () => {
     setWorkerBusy(false);
   }
 });
+
+async function reEvaluateAll() {
+  setWorkerBusy(true, "正在用 2 年经历主简历重算全部岗位评分...");
+  try {
+    const res = await api("/api/jobs/re-evaluate-all", { method: "POST" });
+    await refreshState();
+    els.liveLogLatest.textContent = `已重算全部 ${res.count} 条岗位匹配度与建议`;
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    setWorkerBusy(false);
+  }
+}
+
+els.btnRecalcAll.addEventListener("click", reEvaluateAll);
+els.btnRecalcFromResumes.addEventListener("click", reEvaluateAll);
 
 els.btnOpenImport.addEventListener("click", () => els.importModal.showModal());
 
@@ -796,7 +1176,9 @@ els.btnFillSampleJobs.addEventListener("click", () => {
         industry: "银行/金融",
         recruiter_title: "HRBP",
         salary_range: "20-30K",
-        jd_text: "银行核心AI风控问答系统测试，要求大厂背景，入职有严格背调与核薪流水。",
+        experience_req: "1-3年",
+        education_req: "本科",
+        jd_text: "负责大模型与RAG智能问答系统的效果评测、接口自动化及Pytest框架维护，要求严格背调与个税流水核验。",
       },
       {
         job_title: "AI应用测试工程师",
@@ -806,7 +1188,9 @@ els.btnFillSampleJobs.addEventListener("click", () => {
         industry: "人工智能",
         recruiter_title: "测试经理",
         salary_range: "12-18K",
-        jd_text: "急招！独立负责测试从0到1搭建，主要做大模型Prompt评测和Playwright自动化，非外包。",
+        experience_req: "1-3年",
+        education_req: "本科",
+        jd_text: "急招！独立负责Web及移动端测试体系从0到1搭建，主要做大模型Prompt评测、RAG知识库检索验证、Python+Pytest接口自动化与Playwright，非外包。",
       },
       {
         job_title: "AI模型测试工程师（接受小白无经验）",
@@ -828,7 +1212,7 @@ els.importForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   try {
     const parsed = JSON.parse(els.importJsonInput.value);
-    els.liveLogLatest.textContent = "正在解析并按条件联网背调补查...";
+    els.liveLogLatest.textContent = "正在按 2 年经历主简历评估匹配度与背调...";
     await api("/api/jobs/import", {
       method: "POST",
       body: JSON.stringify({ jobs: Array.isArray(parsed) ? parsed : [parsed] }),
@@ -838,11 +1222,6 @@ els.importForm.addEventListener("submit", async (e) => {
   } catch (err) {
     alert(`导入失败：${err.message}`);
   }
-});
-
-els.btnSwapTracks.addEventListener("click", async () => {
-  await api("/api/tracks/swap", { method: "POST" });
-  await refreshState();
 });
 
 els.blacklistForm.addEventListener("submit", async (e) => {
@@ -857,11 +1236,17 @@ els.blacklistForm.addEventListener("submit", async (e) => {
 els.settingsForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(els.settingsForm);
-  const payload = Object.fromEntries(fd.entries());
-  if (Number(payload.delay_min_ms) < 3000) payload.delay_min_ms = "3000";
-  await api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
+  const rawObj = Object.fromEntries(fd.entries());
+  const kwList = String(rawObj.watchlist_text || "")
+    .split(/[\r\n,，、]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  delete rawObj.watchlist_text;
+  if (kwList.length > 0) rawObj.watchlist_keywords = JSON.stringify([...new Set(kwList)]);
+  if (Number(rawObj.delay_min_ms) < 3000) rawObj.delay_min_ms = "3000";
+  await api("/api/settings", { method: "POST", body: JSON.stringify(rawObj) });
   await refreshState();
-  alert("配置已保存");
+  alert("巡检计划与系统配置已保存");
 });
 
 els.verifyDoneBtn.addEventListener("click", async () => {
@@ -876,6 +1261,11 @@ els.verifyDismissBtn.addEventListener("click", () => { els.verifyBanner.hidden =
 
 const evt = new EventSource("/api/events");
 evt.addEventListener("log", (e) => { els.liveLogLatest.textContent = JSON.parse(e.data).message; });
+evt.addEventListener("patrol-progress", (e) => {
+  const p = JSON.parse(e.data);
+  if (p.done) return;
+  els.liveLogLatest.textContent = `巡检 [${p.step}/${p.total}] ${p.profileId} · ${p.keyword}（已累计 ${p.savedCount} 条）`;
+});
 evt.addEventListener("verification", (e) => showVerifyBanner(JSON.parse(e.data)));
 evt.addEventListener("update-progress", (e) => {
   const p = JSON.parse(e.data);
