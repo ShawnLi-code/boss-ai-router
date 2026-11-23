@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { evaluateJobRisk, shouldTriggerWebSearch } from "../src/scoring.mjs";
 import { analyzeSearchSnippets } from "../src/websearch.mjs";
-import { DEFAULT_TARGET_ROLES, evaluateJobEligibility, factGuardCheck, matchResumeToJob } from "../src/matcher.mjs";
+import { DEFAULT_TARGET_ROLES, evaluateJobEligibility, evaluateSalaryFit, factGuardCheck, matchResumeToJob, parseSalaryRangeK } from "../src/matcher.mjs";
 import { calculateBikePlusMetroMetrics } from "../src/commute.mjs";
 import { normalizeCompanyRoot } from "../src/db.mjs";
 import { compareSemver } from "../src/updater.mjs";
@@ -417,6 +417,79 @@ test("三段式企业尽调解析：提取工商全称、实缴资本与职场�
   assert.ok(res.reputation.negative_tags.includes("欠薪/拖欠工资"));
   assert.equal(res.reputation.health_level, "DANGER");
 });
+
+test("薪资分级与门槛：低于7K过滤，9-12K高亮且高权重加分", () => {
+  assert.equal(parseSalaryRangeK("6-9K").min, 6);
+  assert.equal(parseSalaryRangeK("10-12K·13薪").max, 12);
+
+  const lowElig = evaluateJobEligibility({
+    job_title: "软件测试工程师",
+    salary_range: "6-9K",
+    experience_req: "1-3年",
+    jd_text: "负责功能测试与接口测试、测试用例编写与缺陷跟踪。",
+  });
+  assert.equal(lowElig.filter_status, "FILTERED");
+  assert.equal(lowElig.filter_category, "SALARY_TOO_LOW");
+
+  const idealFit = evaluateSalaryFit("10-12K");
+  assert.equal(idealFit.tier, "TARGET_EXACT");
+  assert.equal(idealFit.highlighted, true);
+  assert.ok(idealFit.weight_bonus >= 12);
+
+  const coverFit = evaluateSalaryFit("10-15K");
+  assert.equal(coverFit.tier, "TARGET_COVER");
+  assert.equal(coverFit.highlighted, true);
+
+  const resume = {
+    years_label: "2年经验",
+    summary: "2年功能测试、接口测试、Python自动化和AI测试经验。",
+    skills: ["Python", "Pytest", "Postman"],
+    experiences: [{ company: "示例", role: "软件测试", period: "2024.06-2026.05", content: "功能测试、接口测试、测试用例编写" }],
+    projects: [],
+    education: [{ degree: "本科" }],
+  };
+  const baseJob = {
+    company_name: "广州灵眸",
+    job_title: "AI测试工程师",
+    experience_req: "1-3年",
+    education_req: "本科",
+    jd_text: "负责功能测试、接口测试与测试用例编写。",
+  };
+  const matchIdeal = matchResumeToJob({ ...baseJob, salary_range: "10-12K" }, resume);
+  const matchLow = matchResumeToJob({ ...baseJob, salary_range: "7-8K" }, resume);
+  assert.equal(matchIdeal.salary_fit.tier, "TARGET_EXACT");
+  assert.ok(matchIdeal.match_score > matchLow.match_score);
+});
+
+test("异地跨城与小语种翻译过滤：拦截 base杭州/base北京/芜湖 及外语翻译标注", () => {
+  const hz = evaluateJobEligibility({
+    job_title: "AI模型评测专家【base杭州】",
+    salary_range: "13-25K",
+    experience_req: "1-3年",
+    jd_text: "本岗位base杭州，需长期在杭办公，负责模型评测。",
+  }, { search_city_name: "广州" });
+  assert.equal(hz.filter_status, "FILTERED");
+  assert.equal(hz.filter_category, "REMOTE_CITY");
+
+  const bj = evaluateJobEligibility({
+    job_title: "大模型评测工程师",
+    salary_range: "11-20K",
+    experience_req: "1-3年",
+    jd_text: "base 北京\n负责评测打分与数据标注管理。",
+  }, { search_city_name: "广州" });
+  assert.equal(bj.filter_status, "FILTERED");
+  assert.equal(bj.filter_category, "REMOTE_CITY");
+
+  const lang = evaluateJobEligibility({
+    job_title: "小语种翻译(大模型评测)",
+    salary_range: "11-20K",
+    experience_req: "1-3年",
+    jd_text: "菲律宾语母语者或等同母语水平，SFT文本标注。",
+  });
+  assert.equal(lang.filter_status, "FILTERED");
+  assert.equal(lang.filter_category, "NON_QA_ROLE");
+});
+
 
 
 

@@ -15,6 +15,7 @@ const state = {
   egoProfiles: [],
   activeView: "jobs",
   activeFilter: "ALL",
+  commuteMaxMin: "all",
   searchText: "",
   sortBy: "match",
   selectedJobId: null,
@@ -71,6 +72,7 @@ const els = {
   btnRecalcAll: document.getElementById("btn-recalc-all"),
   btnOpenImport: document.getElementById("btn-open-import"),
   cntAll: document.getElementById("cnt-all"),
+  cntSalaryIdeal: document.getElementById("cnt-salary-ideal"),
   cntDirect: document.getElementById("cnt-direct"),
   cntRevise: document.getElementById("cnt-revise"),
   cntIdeal: document.getElementById("cnt-ideal"),
@@ -78,6 +80,7 @@ const els = {
   btnPurgeFiltered: document.getElementById("btn-purge-filtered"),
   btnCalcCommute: document.getElementById("btn-calc-commute"),
   jobSearchInput: document.getElementById("job-search-input"),
+  jobCommuteFilter: document.getElementById("job-commute-filter"),
   jobSortSelect: document.getElementById("job-sort-select"),
   jobListPane: document.getElementById("job-list-pane"),
   jobInspectorPane: document.getElementById("job-inspector-pane"),
@@ -219,6 +222,13 @@ document.querySelectorAll(".seg-btn[data-filter]").forEach((btn) => {
 els.jobSearchInput.addEventListener("input", () => {
   state.searchText = els.jobSearchInput.value.trim().toLowerCase();
   renderJobList();
+  renderInspector();
+});
+
+els.jobCommuteFilter.addEventListener("change", () => {
+  state.commuteMaxMin = els.jobCommuteFilter.value;
+  renderJobList();
+  renderInspector();
 });
 
 els.jobSortSelect.addEventListener("change", () => {
@@ -282,6 +292,9 @@ function renderSidebarSummary() {
   const filtered = jobs.filter((j) => j.filter_status === "FILTERED");
   els.navJobsCount.textContent = eligible.length;
   els.cntAll.textContent = eligible.length;
+  if (els.cntSalaryIdeal) {
+    els.cntSalaryIdeal.textContent = eligible.filter((j) => j.match?.salary_fit?.highlighted).length;
+  }
   els.cntDirect.textContent = eligible.filter((j) => (j.apply_advice || j.match?.apply_advice) === "DIRECT_APPLY").length;
   els.cntRevise.textContent = eligible.filter((j) => (j.apply_advice || j.match?.apply_advice) === "REVISE_FIRST").length;
   els.cntIdeal.textContent = eligible.filter((j) => (j.match?.eligibility?.exp_tier || "IDEAL_1_3") === "IDEAL_1_3").length;
@@ -373,6 +386,12 @@ function zoneTagHtml(zone, score) {
   return `<span class="zone-tag zone-${esc(zone)}"><span class="zone-dot" aria-hidden="true"></span>${esc(text)}</span>`;
 }
 
+function salaryTagHtml(job) {
+  const sf = job.match?.salary_fit;
+  if (!sf || !sf.highlighted) return "";
+  return `<span class="zone-tag salary-${esc(sf.tier || "TARGET_COVER")}">${esc(sf.label)}</span>`;
+}
+
 function commuteTagHtml(job) {
   const c = job.commute;
   if (!c || c.status !== "DONE" || c.effective_min == null) return "";
@@ -394,9 +413,15 @@ function getFilteredSortedJobs() {
     } else {
       if (isFiltered) return false;
       const adv = j.apply_advice || j.match?.apply_advice || "REVISE_FIRST";
+      if (state.activeFilter === "SALARY_IDEAL" && !j.match?.salary_fit?.highlighted) return false;
       if (state.activeFilter === "DIRECT_APPLY" && adv !== "DIRECT_APPLY") return false;
       if (state.activeFilter === "REVISE_FIRST" && adv !== "REVISE_FIRST") return false;
       if (state.activeFilter === "IDEAL_1_3" && (j.match?.eligibility?.exp_tier || "IDEAL_1_3") !== "IDEAL_1_3") return false;
+    }
+    if (state.commuteMaxMin !== "all") {
+      const cap = Number(state.commuteMaxMin);
+      const mins = j.commute?.status === "DONE" ? j.commute?.effective_min : null;
+      if (mins == null || mins > cap) return false;
     }
     if (state.searchText) {
       const hay = `${j.job_title} ${j.company_name} ${j.matched_query || ""} ${j.jd_text || ""} ${j.industry || ""} ${j.filter_reason || ""}`.toLowerCase();
@@ -406,7 +431,11 @@ function getFilteredSortedJobs() {
   });
 
   if (state.sortBy === "match") {
-    list = [...list].sort((a, b) => (b.match_score || 0) - (a.match_score || 0) || b.id - a.id);
+    list = [...list].sort((a, b) =>
+      (b.match_score || 0) - (a.match_score || 0) ||
+      (b.match?.salary_fit?.rank || 0) - (a.match?.salary_fit?.rank || 0) ||
+      b.id - a.id
+    );
   } else if (state.sortBy === "commute") {
     list = [...list].sort((a, b) => {
       const am = a.commute?.status === "DONE" && a.commute.effective_min != null ? a.commute.effective_min : 9999;
@@ -432,20 +461,22 @@ function renderJobList() {
     .map((j) => {
       const selected = j.id === state.selectedJobId;
       const adv = j.apply_advice || j.match?.apply_advice || "REVISE_FIRST";
+      const salaryIdeal = j.filter_status !== "FILTERED" && Boolean(j.match?.salary_fit?.highlighted);
       const expBadge = j.filter_status === "FILTERED"
         ? (j.filter_reason || "已过滤杂岗")
         : (j.match?.eligibility?.exp_badge || j.experience_req || "");
       const srcTag = j.matched_query ? `${j.matched_query}` : "";
       const locSub = j.area_district || (j.work_address ? j.work_address.slice(0, 14) : "");
       return `
-        <button type="button" class="job-row" role="option" aria-selected="${selected}" data-select-job="${j.id}">
+        <button type="button" class="job-row ${salaryIdeal ? "job-row-salary-ideal" : ""}" role="option" aria-selected="${selected}" data-select-job="${j.id}">
           <div class="job-row-top">
             <span class="job-row-title">${esc(j.job_title)}</span>
-            <span class="job-row-salary">${esc(j.salary_range || "面议")}</span>
+            <span class="job-row-salary ${salaryIdeal ? "is-ideal" : ""}">${esc(j.salary_range || "面议")}</span>
           </div>
           <div class="job-row-sub">${esc(j.company_name)}${locSub ? ` · ${esc(locSub)}` : ""} · ${esc(j.experience_req || "经验不限")} · ${esc(j.recruiter_active || j.recruiter_title || "未知")}</div>
           <div class="job-row-meta">
             ${j.filter_status === "FILTERED" ? `<span class="meta-pill">${esc(expBadge)}</span>` : adviceTagHtml(adv, j.match_score || 0)}
+            ${j.filter_status !== "FILTERED" ? salaryTagHtml(j) : ""}
             ${commuteTagHtml(j)}
             ${j.filter_status !== "FILTERED" && expBadge ? `<span class="meta-pill">${esc(expBadge)}</span>` : ""}
             ${zoneTagHtml(j.zone, j.risk_score)}
@@ -533,6 +564,7 @@ async function renderInspector(fetchFresh = false) {
       </div>
       <div class="inspector-controls">
         ${adviceTagHtml(applyAdvice, job.match_score || 0)}
+        ${job.filter_status !== "FILTERED" ? salaryTagHtml(job) : ""}
         ${commuteTagHtml(job)}
         ${zoneTagHtml(job.zone, job.risk_score)}
         <button type="button" class="btn btn-secondary btn-xs" id="insp-open-page">Ego 打开</button>
@@ -1077,6 +1109,10 @@ function renderSettings() {
   form.filter_exp_mode.value = settings.filter_exp_mode || "prefer_1_3_allow_3_5";
   form.filter_exclude_intern.value = settings.filter_exclude_intern || "true";
   form.filter_exclude_non_qa.value = settings.filter_exclude_non_qa || "true";
+  if (form.filter_min_salary_k) form.filter_min_salary_k.value = settings.filter_min_salary_k ?? "7";
+  if (form.target_salary_min_k) form.target_salary_min_k.value = settings.target_salary_min_k ?? "9";
+  if (form.target_salary_max_k) form.target_salary_max_k.value = settings.target_salary_max_k ?? "12";
+  if (form.filter_exclude_remote) form.filter_exclude_remote.value = settings.filter_exclude_remote || "true";
   form.delay_min_ms.value = settings.delay_min_ms || "4500";
   form.delay_max_ms.value = settings.delay_max_ms || "8500";
   form.auto_web_search.value = settings.auto_web_search || "true";

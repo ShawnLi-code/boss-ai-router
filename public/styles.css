@@ -387,9 +387,19 @@ html, body {
 }
 
 .job-row:hover { background: var(--bg-subtle); }
+.job-row-salary-ideal {
+  background: light-dark(rgba(245, 158, 11, 0.055), rgba(245, 158, 11, 0.07));
+  box-shadow: inset 3px 0 0 #d97706;
+}
+.job-row-salary-ideal:hover {
+  background: light-dark(rgba(245, 158, 11, 0.1), rgba(245, 158, 11, 0.12));
+}
 .job-row[aria-selected="true"] {
   background: var(--bg-active);
   box-shadow: inset 3px 0 0 var(--accent-teal);
+}
+.job-row-salary-ideal[aria-selected="true"] {
+  box-shadow: inset 3px 0 0 #f59e0b;
 }
 
 .job-row-top {
@@ -413,6 +423,13 @@ html, body {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   flex: none;
+}
+.job-row-salary.is-ideal {
+  color: var(--yellow-fg);
+  background: var(--yellow-bg);
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-weight: 700;
 }
 
 .job-row-sub {
@@ -682,6 +699,15 @@ html, body {
 .commute-MODERATE { color: var(--accent-teal); background: var(--accent-teal-bg); }
 .commute-FAR { color: var(--yellow-fg); background: var(--yellow-bg); }
 .commute-EXTREME { color: var(--red-fg); background: var(--red-bg); }
+.salary-TARGET_EXACT {
+  color: var(--yellow-fg);
+  background: var(--yellow-bg);
+  border: 1px solid light-dark(rgba(217, 119, 6, 0.35), rgba(251, 191, 36, 0.35));
+}
+.salary-TARGET_COVER {
+  color: var(--yellow-fg);
+  background: light-dark(rgba(254, 243, 199, 0.65), rgba(245, 158, 11, 0.1));
+}
 .commute-strip {
   display: flex;
   justify-content: space-between;

@@ -136,6 +136,7 @@
         <div class="subbar">
           <div class="segmented" role="group" aria-label="按精筛结果筛选">
             <button type="button" class="seg-btn active" data-filter="ALL">精选测试池 <span id="cnt-all">0</span></button>
+            <button type="button" class="seg-btn" data-filter="SALARY_IDEAL">9-12K理想薪资 <span id="cnt-salary-ideal">0</span></button>
             <button type="button" class="seg-btn" data-filter="DIRECT_APPLY">可直接投 <span id="cnt-direct">0</span></button>
             <button type="button" class="seg-btn" data-filter="REVISE_FIRST">改微调/3-5年冲刺 <span id="cnt-revise">0</span></button>
             <button type="button" class="seg-btn" data-filter="IDEAL_1_3">仅看 1-3年/不限 <span id="cnt-ideal">0</span></button>
@@ -143,8 +144,13 @@
           </div>
           <div class="subbar-right">
             <input type="search" id="job-search-input" placeholder="过滤岗位 / 公司 / JD" aria-label="过滤已保存岗位" class="input-compact" style="width:170px;">
+            <select id="job-commute-filter" aria-label="按通勤耗时筛选" class="input-compact">
+              <option value="all">全部同城距离</option>
+              <option value="60">仅看 ≤60 分钟通勤</option>
+              <option value="45">极近 ≤45 分钟</option>
+            </select>
             <select id="job-sort-select" aria-label="排序方式" class="input-compact">
-              <option value="match">按匹配分高→低</option>
+              <option value="match">按 9-12K 权重+匹配分</option>
               <option value="commute">按通勤短→长</option>
               <option value="recent">按最新采集</option>
               <option value="risk">按背调风险低→高</option>
@@ -152,7 +158,7 @@
             <button type="button" id="btn-calc-commute" class="btn btn-secondary btn-xs" title="根据居住地址测算精选岗位单车+地铁通勤耗时">测算通勤</button>
             <button type="button" id="btn-purge-filtered" class="btn btn-ghost btn-xs" hidden>清理杂岗</button>
             <div class="live-log-inline" aria-live="polite">
-              <span id="live-log-latest">就绪 · 默认只看测试相关高权重岗（已拦截实习/开发/产品/5年以上）</span>
+              <span id="live-log-latest">就绪 · 默认只看 7K+ 同城测试高权重岗（9-12K 高亮提权，已拦截 &lt;7K/异地/实习/非测岗）</span>
             </div>
           </div>
         </div>
@@ -282,6 +288,25 @@
                 <span>过滤产品 / 开发 / 硬件等非测试岗</span>
                 <select name="filter_exclude_non_qa">
                   <option value="true">开启（仅留软件测试/AI评测/工程向提示词）</option>
+                  <option value="false">关闭</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>最低起薪门槛 (K，低于此值过滤)</span>
+                <input type="number" name="filter_min_salary_k" min="0" max="30" step="1" value="7">
+              </label>
+              <label class="field">
+                <span>期望高权重薪资下限 (K)</span>
+                <input type="number" name="target_salary_min_k" min="5" max="50" step="1" value="9">
+              </label>
+              <label class="field">
+                <span>期望高权重薪资上限 (K)</span>
+                <input type="number" name="target_salary_max_k" min="5" max="80" step="1" value="12">
+              </label>
+              <label class="field">
+                <span>过滤明确跨城 / 异地工作地岗位</span>
+                <select name="filter_exclude_remote">
+                  <option value="true">开启（拦截 base 外省市/非当前搜城）</option>
                   <option value="false">关闭</option>
                 </select>
               </label>

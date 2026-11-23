@@ -85,6 +85,166 @@ function splitMustVsBonus(jdText = "") {
   };
 }
 
+export function parseSalaryRangeK(salaryText = "") {
+  const raw = String(salaryText || "").trim();
+  if (!raw || /面议/.test(raw)) {
+    return { min: null, max: null, mid: null, raw, unit: "UNKNOWN" };
+  }
+  const dayRange = raw.match(/(\d+(?:\.\d+)?)\s*[-~到至]\s*(\d+(?:\.\d+)?)\s*元?\s*\/\s*天/);
+  if (dayRange) {
+    const min = Number(((Number(dayRange[1]) * 21.75) / 1000).toFixed(1));
+    const max = Number(((Number(dayRange[2]) * 21.75) / 1000).toFixed(1));
+    return { min, max, mid: Number(((min + max) / 2).toFixed(1)), raw, unit: "DAY" };
+  }
+  const daySingle = raw.match(/(\d+(?:\.\d+)?)\s*元\s*\/\s*天/);
+  if (daySingle) {
+    const k = Number(((Number(daySingle[1]) * 21.75) / 1000).toFixed(1));
+    return { min: k, max: k, mid: k, raw, unit: "DAY" };
+  }
+  const rangeK = raw.match(/(\d+(?:\.\d+)?)\s*[-~到至]\s*(\d+(?:\.\d+)?)\s*[kK千]/);
+  if (rangeK) {
+    const min = Number(rangeK[1]);
+    const max = Number(rangeK[2]);
+    return { min, max, mid: Number(((min + max) / 2).toFixed(1)), raw, unit: "K" };
+  }
+  const rangeYuan = raw.match(/(\d{4,5})\s*[-~到至]\s*(\d{4,5})/);
+  if (rangeYuan) {
+    const min = Number((Number(rangeYuan[1]) / 1000).toFixed(1));
+    const max = Number((Number(rangeYuan[2]) / 1000).toFixed(1));
+    return { min, max, mid: Number(((min + max) / 2).toFixed(1)), raw, unit: "YUAN" };
+  }
+  const singleK = raw.match(/(\d+(?:\.\d+)?)\s*[kK千]/);
+  if (singleK) {
+    const k = Number(singleK[1]);
+    return { min: k, max: k, mid: k, raw, unit: "K" };
+  }
+  return { min: null, max: null, mid: null, raw, unit: "UNKNOWN" };
+}
+
+export function evaluateSalaryFit(salaryText = "", settings = {}) {
+  const minSalaryK = settings.filter_min_salary_k === "" || settings.filter_min_salary_k == null
+    ? 7
+    : Number(settings.filter_min_salary_k);
+  const targetMinK = Number(settings.target_salary_min_k || 9);
+  const targetMaxK = Number(settings.target_salary_max_k || 12);
+  const parsed = parseSalaryRangeK(salaryText);
+
+  if (parsed.min === null) {
+    return {
+      ...parsed,
+      tier: "UNKNOWN",
+      label: parsed.raw || "面议",
+      highlighted: false,
+      below_min: false,
+      weight_bonus: 0,
+      rank: 1,
+    };
+  }
+
+  if (minSalaryK > 0 && parsed.min < minSalaryK) {
+    return {
+      ...parsed,
+      tier: "BELOW_MIN",
+      label: `低于${minSalaryK}K`,
+      highlighted: false,
+      below_min: true,
+      weight_bonus: -15,
+      rank: 0,
+    };
+  }
+
+  const effMax = parsed.max ?? parsed.min;
+  const overlap = Math.max(0, Math.min(effMax, targetMaxK) - Math.max(parsed.min, targetMinK));
+  const insideStrict = parsed.min >= targetMinK && effMax <= targetMaxK;
+  const centeredCore =
+    parsed.mid >= targetMinK &&
+    parsed.mid <= targetMaxK &&
+    parsed.min >= targetMinK - 1 &&
+    effMax <= targetMaxK + 1 &&
+    overlap >= 2;
+
+  if (insideStrict || centeredCore) {
+    return {
+      ...parsed,
+      tier: "TARGET_EXACT",
+      label: `${targetMinK}-${targetMaxK}K理想薪资`,
+      highlighted: true,
+      below_min: false,
+      weight_bonus: 14,
+      rank: 4,
+    };
+  }
+
+  const coversIdealBand =
+    overlap >= 1 &&
+    parsed.min >= targetMinK - 1 &&
+    effMax <= targetMaxK + 4;
+  if (coversIdealBand) {
+    return {
+      ...parsed,
+      tier: "TARGET_COVER",
+      label: `覆盖${targetMinK}-${targetMaxK}K`,
+      highlighted: true,
+      below_min: false,
+      weight_bonus: 9,
+      rank: 3,
+    };
+  }
+
+  if (effMax <= targetMinK + 1 && parsed.min < targetMinK) {
+    return {
+      ...parsed,
+      tier: "LOWER_OK",
+      label: `${minSalaryK}-${targetMinK}K过渡`,
+      highlighted: false,
+      below_min: false,
+      weight_bonus: -3,
+      rank: 1,
+    };
+  }
+
+  return {
+    ...parsed,
+    tier: parsed.min > targetMaxK ? "ABOVE_TARGET" : "OVERLAP_WIDE",
+    label: parsed.min > targetMaxK ? "高薪竞聘" : "区间偏宽",
+    highlighted: false,
+    below_min: false,
+    weight_bonus: parsed.min >= targetMinK && parsed.min <= targetMaxK ? 3 : 0,
+    rank: 2,
+  };
+}
+
+function detectExplicitRemoteCity(job, targetCityName = "广州") {
+  const target = String(targetCityName || "广州").replace(/市$/, "").trim();
+  if (!target) return "";
+  const title = String(job.job_title || "");
+  const jdHead = String(job.jd_text || "").slice(0, 260);
+  const workAddr = String(job.work_address || "").trim();
+
+  const knownCities = ["北京", "上海", "深圳", "杭州", "成都", "武汉", "南京", "苏州", "芜湖", "西安", "重庆", "长沙", "天津", "青岛", "厦门", "合肥", "郑州"];
+  const others = knownCities.filter((c) => c !== target);
+  const othersAlternation = others.join("|");
+
+  // 1) 标题或JD明确标注 base / 工作地点在外地
+  const explicitRe = new RegExp(`(?:base|工作地点|办公地点|驻地|常驻)[:：\\s【\\(]*?(?:在)?(${othersAlternation})`, "i");
+  const titleMatch = title.match(explicitRe) || title.match(new RegExp(`[【\\(（]base\\s*(${othersAlternation})[】\\)）]?`, "i"));
+  if (titleMatch?.[1]) return titleMatch[1];
+
+  const jdMatch = jdHead.match(explicitRe);
+  if (jdMatch?.[1] && !jdHead.includes(target)) return jdMatch[1];
+
+  // 2) 标题直接指明异地分公司招聘，且无本地地址
+  const titleCityMatch = title.match(new RegExp(`(${othersAlternation})(?:公司|翻译|项目|分部|研发)?[|｜·]`));
+  if (titleCityMatch?.[1] && !workAddr.includes(target)) return titleCityMatch[1];
+
+  // 3) 已解析的工作地址明确落入外地城市
+  if (workAddr && !workAddr.includes(target)) {
+    const addrCity = others.find((c) => workAddr.includes(`${c}市`) || workAddr.startsWith(c));
+    if (addrCity) return addrCity;
+  }
+  return "";
+}
+
 export function parseExperienceYears(expText = "", jdText = "") {
   const rawExp = String(expText || "").trim();
   const jdExpMatch = String(jdText || "").match(/(\d+\s*[-~到至]\s*\d+\s*年|\d+\s*年以上|1年以内|经验不限)/);
@@ -127,7 +287,10 @@ export function evaluateJobEligibility(job, settings = {}) {
 
   const excludeIntern = settings.filter_exclude_intern !== "false";
   const excludeNonQa = settings.filter_exclude_non_qa !== "false";
+  const excludeRemote = settings.filter_exclude_remote !== "false";
+  const targetCityName = String(settings.search_city_name || "广州").trim();
   const expMode = settings.filter_exp_mode || "prefer_1_3_allow_3_5";
+  const salaryFit = evaluateSalaryFit(job.salary_range, settings);
 
   // 1. 实习 / 兼职 / 校招拦截
   if (excludeIntern) {
@@ -163,14 +326,14 @@ export function evaluateJobEligibility(job, settings = {}) {
 
   // 2. 非测试类杂岗过滤
   if (excludeNonQa) {
-    // A. 硬件 / 驾驶路测 / 电子实验室 / 动环电力 / 纯低壁垒标注市场测评
-    const offDomainHardware = /自动驾驶.*测试|智能驾驶测试|试驾|安全员|路测员|开车测试|电子元器件|实验室|动环|电力监控|电磁兼容|EMC|安规|射频测试|硬件测试|老化测试|仪器仪表/.test(`${title}\n${jd.slice(0, 400)}`);
+    // A. 硬件 / 驾驶路测 / 车身域整车 / 电子实验室 / 动环电力 / 纯低壁垒标注市场测评
+    const offDomainHardware = /自动驾驶.*测试|智能驾驶测试|试驾|安全员|路测员|开车测试|车身域|整车集成|电子元器件|实验室|动环|电力监控|电磁兼容|EMC|安规|射频测试|硬件测试|老化测试|仪器仪表/.test(`${title}\n${jd.slice(0, 400)}`);
     if (offDomainHardware) {
       return {
         eligible: false,
         filter_status: "FILTERED",
         filter_category: "NON_QA_ROLE",
-        filter_reason: "已过滤·硬件/实验室/动环/驾驶路测等非软件AI测试",
+        filter_reason: "已过滤·硬件/车身域/实验室/动环/驾驶路测等非软件AI测试",
         qa_relevance: qaRelevance,
         exp_tier: "OFF_DOMAIN",
         exp_badge: "非软件测试",
@@ -178,17 +341,18 @@ export function evaluateJobEligibility(job, settings = {}) {
     }
 
     const pureLabelingOrMarket =
-      /数据标注员|兼职标注|线上居家办公|居家标注|市场调研|商家服务|商品测评|接受小白|影视类专业/.test(`${title}\n${jd.slice(0, 320)}`) ||
+      /数据标注员|兼职标注|线上居家办公|居家标注|市场调研|商家服务|商品测评|接受小白|影视类专业|小语种翻译|母语者|native\s*speaker/.test(`${title}\n${jd.slice(0, 360)}`) ||
+      (/翻译公司|(?:菲律宾语|印尼语|巴葡语|越南语|泰语|阿拉伯语).*(?:评测|标注)/.test(`${title}\n${jd.slice(0, 260)}`) && coreQaCapsCount < 2) ||
       (/短剧.*评测|视频评测/i.test(title) && coreQaCapsCount < 2);
     if (pureLabelingOrMarket) {
       return {
         eligible: false,
         filter_status: "FILTERED",
         filter_category: "NON_QA_ROLE",
-        filter_reason: "已过滤·低壁垒数据标注/市场测评/短剧质检",
+        filter_reason: "已过滤·低壁垒数据标注/外语翻译标注/市场测评",
         qa_relevance: qaRelevance,
         exp_tier: "OFF_DOMAIN",
-        exp_badge: "纯标注/调研",
+        exp_badge: "纯标注/翻译",
       };
     }
 
@@ -258,6 +422,35 @@ export function evaluateJobEligibility(job, settings = {}) {
         qa_relevance: qaRelevance,
         exp_tier: "OFF_DOMAIN",
         exp_badge: "非测试岗",
+      };
+    }
+  }
+
+  // 2.5 最低薪资门槛过滤（起薪低于最低期望默认 7K 直接淘汰）
+  if (salaryFit.below_min) {
+    return {
+      eligible: false,
+      filter_status: "FILTERED",
+      filter_category: "SALARY_TOO_LOW",
+      filter_reason: `已过滤·起薪低于 ${settings.filter_min_salary_k ?? 7}K（${job.salary_range || salaryFit.raw}）`,
+      qa_relevance: qaRelevance,
+      exp_tier: "LOW_SALARY",
+      exp_badge: salaryFit.label,
+    };
+  }
+
+  // 2.6 异地/跨城工作地过滤（防止 Boss 搜索混入 base杭州/北京/芜湖/外市工作地）
+  if (excludeRemote) {
+    const remoteCity = detectExplicitRemoteCity(job, targetCityName);
+    if (remoteCity) {
+      return {
+        eligible: false,
+        filter_status: "FILTERED",
+        filter_category: "REMOTE_CITY",
+        filter_reason: `已过滤·非${targetCityName}工作地（检测到「${remoteCity}」）`,
+        qa_relevance: qaRelevance,
+        exp_tier: "REMOTE",
+        exp_badge: `异地·${remoteCity}`,
       };
     }
   }
@@ -447,7 +640,9 @@ export function matchResumeToJob(job, resume, settings = {}) {
       ? 2
       : Math.min(10, Math.round((domainHits.length >= 3 ? 7 : domainHits.length * 2 + 2) + (hasQuantifiable ? 3 : 1)));
 
-  const matchScore = Math.max(0, Math.min(99, workContentScore + techStackScore + roleScore + hardGateScore + projectScore));
+  const salaryFit = evaluateSalaryFit(job.salary_range, settings);
+  const coreScore = workContentScore + techStackScore + roleScore + hardGateScore + projectScore;
+  const matchScore = Math.max(0, Math.min(99, coreScore + salaryFit.weight_bonus));
 
   // 投递建议分级
   const hardBlocked = !eligibility.eligible || reqExp.min >= 5 || job.zone === "SKIP";
@@ -467,7 +662,7 @@ export function matchResumeToJob(job, resume, settings = {}) {
     applyAdvice = "REVISE_FIRST";
     adviceLabel = "3-5年可冲刺·建议微调";
     adviceSummary = `虽标 3-5 年但高度聚焦测试工作（核心命中：${matchedKeywords.slice(0, 4).join("、") || "软件测试"}），建议在个人优势与项目首句强化独立主导经验后再投。`;
-  } else if (matchScore >= 76 && missingMustHaves.length <= 2) {
+  } else if (coreScore >= 72 && matchScore >= 76 && missingMustHaves.length <= 2) {
     applyAdvice = "DIRECT_APPLY";
     adviceLabel = "可直接投递";
     adviceSummary = `1-3年黄金契合且核心工作内容（${matchedClusters.map((c) => CLUSTER_LABELS[c]).join("、") || "软件质量保障"}）高度匹配，可直接选模板跳转沟通并附简历。`;
@@ -477,6 +672,9 @@ export function matchResumeToJob(job, resume, settings = {}) {
     adviceSummary = missingMustHaves.length
       ? `核心基础符合，但 JD 重点考察「${missingMustHaves.slice(0, 3).join("、")}」在简历中显式命中偏弱，建议微调侧重点导出 PDF 后再投。`
       : `整体匹配尚可（${matchScore}分，${expNote}），建议强化量化成果后投递。`;
+  }
+  if (eligibility.eligible && salaryFit.highlighted) {
+    adviceSummary += ` 薪资「${job.salary_range}」命中 ${salaryFit.label}（权重 +${salaryFit.weight_bonus} 分）。`;
   }
 
   const reviseSuggestions = [];
@@ -538,6 +736,7 @@ export function matchResumeToJob(job, resume, settings = {}) {
     advice_label: adviceLabel,
     advice_summary: adviceSummary,
     eligibility,
+    salary_fit: salaryFit,
     dimensions: {
       work_content: { score: workContentScore, max: 35, label: "工作内容重合" },
       tech_stack: { score: techStackScore, max: 25, label: "技能栈命中" },

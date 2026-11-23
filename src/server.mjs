@@ -85,6 +85,24 @@ function resolveEffectiveTrackKey(job) {
   return "B";
 }
 
+function pickMatchPayload(match) {
+  return {
+    matched_keywords: match.matched_keywords,
+    missing_keywords: match.missing_keywords,
+    missing_must_haves: match.missing_must_haves,
+    matched_clusters: match.matched_clusters,
+    dimensions: match.dimensions,
+    eligibility: match.eligibility,
+    salary_fit: match.salary_fit,
+    apply_advice: match.apply_advice,
+    advice_label: match.advice_label,
+    advice_summary: match.advice_summary,
+    revise_suggestions: match.revise_suggestions,
+    greeting_templates: match.greeting_templates,
+    used_llm: Boolean(match.used_llm),
+  };
+}
+
 async function scoreAndStoreJob(rawJob, { runWebSearch = true, useLlm = false } = {}) {
   const settings = getSettings();
   const tracks = getAccountTracks();
@@ -131,20 +149,7 @@ async function scoreAndStoreJob(rawJob, { runWebSearch = true, useLlm = false } 
     filter_status: finalFilterStatus,
     filter_reason: finalFilterReason,
     matched_query: rawJob.matched_query || "",
-    match: {
-      matched_keywords: match.matched_keywords,
-      missing_keywords: match.missing_keywords,
-      missing_must_haves: match.missing_must_haves,
-      matched_clusters: match.matched_clusters,
-      dimensions: match.dimensions,
-      eligibility: match.eligibility,
-      apply_advice: match.apply_advice,
-      advice_label: match.advice_label,
-      advice_summary: match.advice_summary,
-      revise_suggestions: match.revise_suggestions,
-      greeting_templates: match.greeting_templates,
-      used_llm: Boolean(match.used_llm),
-    },
+    match: pickMatchPayload(match),
     tailored_resume: match.tailored_resume,
     custom_greeting: match.custom_greeting,
   });
@@ -513,6 +518,21 @@ const server = http.createServer(async (req, res) => {
       const patch = { ...body };
       if (patch.llm_api_key === "******") delete patch.llm_api_key;
       saveSettings(patch);
+      const filterKeys = [
+        "filter_min_salary_k",
+        "target_salary_min_k",
+        "target_salary_max_k",
+        "filter_exclude_remote",
+        "filter_exp_mode",
+        "filter_exclude_intern",
+        "filter_exclude_non_qa",
+        "search_city_name",
+      ];
+      if (filterKeys.some((k) => k in patch)) {
+        for (const j of listJobs()) {
+          await scoreAndStoreJob(j, { runWebSearch: false });
+        }
+      }
       return sendJson(res, 200, { ok: true, state: buildStatePayload() });
     }
 
@@ -827,20 +847,7 @@ const server = http.createServer(async (req, res) => {
         filter_status: manualRestored ? "PASS" : (match.eligibility?.filter_status || "PASS"),
         filter_reason: manualRestored ? "人工放行" : (match.eligibility?.filter_reason || ""),
         matched_query: job.matched_query || "",
-        match: {
-          matched_keywords: match.matched_keywords,
-          missing_keywords: match.missing_keywords,
-          missing_must_haves: match.missing_must_haves,
-          matched_clusters: match.matched_clusters,
-          dimensions: match.dimensions,
-          eligibility: match.eligibility,
-          apply_advice: match.apply_advice,
-          advice_label: match.advice_label,
-          advice_summary: match.advice_summary,
-          revise_suggestions: match.revise_suggestions,
-          greeting_templates: match.greeting_templates,
-          used_llm: Boolean(match.used_llm),
-        },
+        match: pickMatchPayload(match),
         tailored_resume: match.tailored_resume,
         custom_greeting: match.custom_greeting,
       });
