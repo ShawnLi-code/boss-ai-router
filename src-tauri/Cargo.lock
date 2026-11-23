@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "boss-ai-router"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "tauri",
  "tauri-build",

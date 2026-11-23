@@ -145,9 +145,11 @@
             <input type="search" id="job-search-input" placeholder="过滤岗位 / 公司 / JD" aria-label="过滤已保存岗位" class="input-compact" style="width:170px;">
             <select id="job-sort-select" aria-label="排序方式" class="input-compact">
               <option value="match">按匹配分高→低</option>
+              <option value="commute">按通勤短→长</option>
               <option value="recent">按最新采集</option>
               <option value="risk">按背调风险低→高</option>
             </select>
+            <button type="button" id="btn-calc-commute" class="btn btn-secondary btn-xs" title="根据居住地址测算精选岗位单车+地铁通勤耗时">测算通勤</button>
             <button type="button" id="btn-purge-filtered" class="btn btn-ghost btn-xs" hidden>清理杂岗</button>
             <div class="live-log-inline" aria-live="polite">
               <span id="live-log-latest">就绪 · 默认只看测试相关高权重岗（已拦截实习/开发/产品/5年以上）</span>
@@ -234,6 +236,14 @@
               <label class="field" style="grid-column: 1 / -1;">
                 <span>每日巡检目标岗位（逗号或换行分隔）</span>
                 <textarea name="watchlist_text" rows="3" placeholder="AI应用测试, AI测试, 软件测试, 测试工程师, AI评测, 大模型测试工程师, 模型评测工程师, AI训练师, 提示词工程师"></textarea>
+              </label>
+              <label class="field">
+                <span>我的居住地址（仅存本机，测算单车+地铁）</span>
+                <input type="text" name="home_address" placeholder="例如：广州市天河区XX街道XX号">
+              </label>
+              <label class="field">
+                <span>居住城市</span>
+                <input type="text" name="home_city" placeholder="广州">
               </label>
               <label class="field">
                 <span>应用打开时自动每日巡检</span>

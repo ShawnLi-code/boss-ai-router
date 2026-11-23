@@ -44,6 +44,7 @@ import {
   launchUpdateInstaller,
 } from "./updater.mjs";
 import {
+  enrichJobDetailsAndCommuteViaEgo,
   finishEgoSpace,
   generateResumePdfViaEgo,
   getActiveLock,
@@ -147,6 +148,36 @@ async function scoreAndStoreJob(rawJob, { runWebSearch = true, useLlm = false } 
     tailored_resume: match.tailored_resume,
     custom_greeting: match.custom_greeting,
   });
+}
+
+async function autoComputeCommuteForJobs(jobs = [], onLog = () => {}) {
+  const settings = getSettings();
+  const homeAddress = String(settings.home_address || "").trim();
+  if (!homeAddress) return;
+  const homeCity = String(settings.home_city || "广州").trim();
+  const targets = jobs.filter(
+    (j) => (j.filter_status || "PASS") === "PASS" && (j.commute?.status !== "DONE" || j.commute?.home_address !== homeAddress)
+  );
+  if (targets.length === 0) return;
+  try {
+    const resEnrich = await enrichJobDetailsAndCommuteViaEgo({
+      jobs: targets,
+      homeAddress,
+      homeCity,
+      fetchMissingAddress: false,
+      onLog,
+    });
+    for (const item of resEnrich.items) {
+      updateJobRouting(item.id, {
+        work_address: item.work_address || undefined,
+        longitude: item.longitude ?? undefined,
+        latitude: item.latitude ?? undefined,
+        commute: item.commute,
+      });
+    }
+  } catch (err) {
+    onLog(`通勤自动测算跳过：${err.message}`, "warn");
+  }
 }
 
 let patrolRunning = false;
@@ -274,6 +305,7 @@ async function runDailyPatrol({
     }
 
     const summary = `${new Date().toLocaleString("zh-CN", { hour12: false })} · 完成 ${targetKeywords.length} 类岗位 × ${touchedProfiles.join("+")} 巡检，保存/更新 ${totalSaved} 条岗位`;
+    await autoComputeCommuteForJobs(listJobs().filter((j) => (j.filter_status || "PASS") === "PASS" && j.commute?.status !== "DONE"), (m, lvl) => logEvent(m, lvl));
     saveSettings({
       last_daily_check_date: todayStr(),
       last_daily_check_summary: summary,
@@ -611,6 +643,7 @@ const server = http.createServer(async (req, res) => {
           )
         );
       }
+      await autoComputeCommuteForJobs(savedJobs, (m, lvl) => logEvent(m, lvl));
 
       if (scrapeRes.status === "VERIFICATION_REQUIRED") {
         tripProfileBreaker(profileId, "采集岗位过程中触发安全验证");
@@ -657,6 +690,78 @@ const server = http.createServer(async (req, res) => {
       const removed = purgeFilteredJobs();
       logEvent(`已从本地库清理 ${removed} 条已过滤杂岗`);
       return sendJson(res, 200, { ok: true, removed, state: buildStatePayload() });
+    }
+
+    if (req.method === "POST" && pathname === "/api/jobs/enrich-commute") {
+      const body = await readBody(req).catch(() => ({}));
+      const settings = getSettings();
+      const homeAddress = (body.home_address || settings.home_address || "").trim();
+      const homeCity = (body.home_city || settings.home_city || "广州").trim();
+      if (!homeAddress) {
+        return sendJson(res, 400, { error: "请先在「巡检计划与设置」填写你的居住地址后再测算通勤" });
+      }
+      const all = listJobs();
+      const candidates = Array.isArray(body.jobIds) && body.jobIds.length
+        ? all.filter((j) => body.jobIds.includes(j.id))
+        : all.filter(
+            (j) =>
+              (j.filter_status || "PASS") === "PASS" &&
+              (body.force || j.commute?.status !== "DONE" || j.commute?.home_address !== homeAddress)
+          );
+      if (candidates.length === 0) {
+        return sendJson(res, 200, { ok: true, updated: 0, state: buildStatePayload() });
+      }
+      const resEnrich = await enrichJobDetailsAndCommuteViaEgo({
+        jobs: candidates,
+        homeAddress,
+        homeCity,
+        fetchMissingAddress: body.fetchMissingAddress !== false,
+        onLog: (m) => logEvent(m),
+      });
+      for (const item of resEnrich.items) {
+        updateJobRouting(item.id, {
+          work_address: item.work_address || undefined,
+          longitude: item.longitude ?? undefined,
+          latitude: item.latitude ?? undefined,
+          commute: item.commute,
+        });
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        updated: resEnrich.items.length,
+        homeResolved: resEnrich.homeResolved,
+        state: buildStatePayload(),
+      });
+    }
+
+    const commuteOneMatch = pathname.match(/^\/api\/jobs\/(\d+)\/commute$/);
+    if (req.method === "POST" && commuteOneMatch) {
+      const job = getJob(Number(commuteOneMatch[1]));
+      if (!job) return sendJson(res, 404, { error: "岗位不存在" });
+      const body = await readBody(req).catch(() => ({}));
+      const settings = getSettings();
+      const homeAddress = (body.home_address || settings.home_address || "").trim();
+      const homeCity = (body.home_city || settings.home_city || "广州").trim();
+      if (!homeAddress) {
+        return sendJson(res, 400, { error: "请先在「巡检计划与设置」填写居住地址" });
+      }
+      const resEnrich = await enrichJobDetailsAndCommuteViaEgo({
+        jobs: [job],
+        homeAddress,
+        homeCity,
+        fetchMissingAddress: !job.work_address || Boolean(body.forceAddress),
+        onLog: (m) => logEvent(m),
+      });
+      const item = resEnrich.items[0];
+      if (item) {
+        updateJobRouting(job.id, {
+          work_address: item.work_address || undefined,
+          longitude: item.longitude ?? undefined,
+          latitude: item.latitude ?? undefined,
+          commute: item.commute,
+        });
+      }
+      return sendJson(res, 200, { ok: true, job: getJob(job.id), state: buildStatePayload() });
     }
 
     const overrideMatch = pathname.match(/^\/api\/jobs\/(\d+)\/override-filter$/);

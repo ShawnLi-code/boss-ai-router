@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { DATA_DIR } from "./db.mjs";
+import { calculateBikePlusMetroMetrics } from "./commute.mjs";
 
 const RUNS_DIR = path.join(DATA_DIR, "ego-runs");
 fs.mkdirSync(RUNS_DIR, { recursive: true });
@@ -86,52 +87,97 @@ export async function searchCompaniesViaEgo(companyNames = [], profileId = "Prof
   const uniqueNames = [...new Set(companyNames.map((s) => String(s || "").trim()).filter(Boolean))];
   if (uniqueNames.length === 0) return {};
 
-  acquireLock(`联网背调补查（${uniqueNames.length} 家公司）`);
+  acquireLock(`企业三段式深度尽调（${uniqueNames.length} 家公司）`);
   try {
-    onLog(`正在通过 Ego 百度检索 ${uniqueNames.length} 家公司的背调/个税/流水舆情...`);
+    onLog(`正在通过 Ego 进行工商全称核验 + 背调查个税 + 知乎/脉脉口碑排查（${uniqueNames.length} 家）...`);
     const code = `
 const randDelay = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
 const companies = ${JSON.stringify(uniqueNames)};
 const task = await taskSpace("boss-intel-search-" + Date.now(), { profileId: ${JSON.stringify(profileId)} });
-const page = (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
 const results = {};
+try {
+const page = (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
 
-for (let i = 0; i < companies.length; i++) {
-  const name = companies[i];
-  const query = \`"\${name}" (背调 OR 个税 OR 流水 OR 离职证明)\`;
-  const url = "https://www.baidu.com/s?wd=" + encodeURIComponent(query);
+async function queryBaidu(wd) {
+  const url = "https://www.baidu.com/s?wd=" + encodeURIComponent(wd);
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 22000 }).catch(() => {});
-  await page.waitForTimeout(randDelay(1800, 2800));
-
+  await page.waitForTimeout(randDelay(1300, 2100));
   const needVerify = await page.evaluate(() => /wappass\\.baidu\\.com|安全验证/.test(location.href + (document.title || "")));
-  if (needVerify) {
-    results[name] = { query, blocked: true, items: [] };
-    continue;
-  }
-
+  if (needVerify) return { blocked: true, items: [] };
   const items = await page.evaluate(() => {
     const out = [];
     document.querySelectorAll("#content_left .c-container, #content_left .result").forEach((el) => {
       const title = (el.querySelector("h3")?.innerText || "").trim();
       const href = el.querySelector("h3 a")?.href || "";
-      const snippet = (el.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 360);
-      if (title && snippet) {
-        out.push({ title, url: href, snippet });
-      }
+      const snippet = (el.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 380);
+      if (title && snippet) out.push({ title, url: href, snippet });
     });
-    return out.slice(0, 8);
+    return out.slice(0, 7);
   });
-
-  results[name] = { query, blocked: false, items };
-  if (i < companies.length - 1) {
-    await page.waitForTimeout(randDelay(1500, 2600));
-  }
+  return { blocked: false, items };
 }
 
-await task.finish({ keep: [] });
+for (let i = 0; i < companies.length; i++) {
+  const name = companies[i];
+  const shortBrand = name
+    .replace(/^(?:中国|广东|深圳|广州|北京|上海|杭州|成都|河北|香港)/g, "")
+    .replace(/(?:科技游戏|信息技术|网络科技|教育科技|电子科技|广告传媒|数字科技|科技有限公司|有限责任公司|股份有限公司|科技|信息|网络|软件|智能|电子|股份|有限|责任|公司|集团|游戏|传媒|贸易|教育|咨询|服饰|服务|（.*?）|\\(.*?\\))/g, "")
+    .trim();
+
+  // Stage 1: 工商全称、实缴资本与天眼查/爱企查资质
+  const q1 = shortBrand && shortBrand.length >= 2 && shortBrand !== name
+    ? \`("\${name}" OR "\${shortBrand}") (爱企查 OR 天眼查 OR 企查查 OR 有限公司)\`
+    : \`"\${name}" (爱企查 OR 天眼查 OR 企查查 OR 有限公司)\`;
+  const r1 = await queryBaidu(q1);
+  if (r1.blocked) { results[name] = { query: q1, blocked: true }; break; }
+
+  // 从 Stage 1 抽出工商注册全称
+  let registeredName = "";
+  const fullRe = /([\\u4e00-\\u9fa5]{2,22}(?:股份有限公司|有限责任公司|有限公司))/g;
+  const counts = new Map();
+  const stem = shortBrand.slice(0, 2);
+  for (const it of r1.items) {
+    const txt = \`\${it.title} \${it.snippet}\`;
+    for (const m of txt.matchAll(fullRe)) {
+      if ((shortBrand.length >= 2 && m[1].includes(shortBrand)) || (stem.length >= 2 && m[1].includes(stem)) || m[1].includes(name)) {
+        counts.set(m[1], (counts.get(m[1]) || 0) + 1);
+      }
+    }
+  }
+  registeredName = [...counts.entries()].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0]?.[0] || "";
+
+  const entityExpr = registeredName && registeredName !== name
+    ? \`("\${registeredName}" OR "\${name}"\${shortBrand.length >= 2 ? \` OR "\${shortBrand}"\` : ""})\`
+    : (shortBrand && shortBrand.length >= 2 && shortBrand !== name ? \`("\${name}" OR "\${shortBrand}")\` : \`"\${name}"\`);
+
+  // Stage 2: 入职背调、第三方背调机构与查个税流水
+  const q2 = \`\${entityExpr} (背调 OR 背景调查 OR 个税 OR 流水 OR 离职证明 OR 社保截图)\`;
+  const r2 = await queryBaidu(q2);
+  if (r2.blocked) { results[name] = { query: q2, blocked: true }; break; }
+
+  // Stage 3: 知乎/看准/脉脉职场口碑、欠薪/裁员/PUA雷区
+  const q3 = \`\${entityExpr} (知乎 OR 看准 OR 脉脉 OR 欠薪 OR 拖欠工资 OR 裁员 OR PUA OR 外包)\`;
+  const r3 = await queryBaidu(q3);
+  if (r3.blocked) { results[name] = { query: q3, blocked: true }; break; }
+
+  results[name] = {
+    query: \`\${q1} || \${q2} || \${q3}\`,
+    blocked: false,
+    registeredName,
+    creditItems: r1.items,
+    bgItems: r2.items,
+    repItems: r3.items,
+  };
+  if (i < companies.length - 1) {
+    await page.waitForTimeout(randDelay(1200, 2000));
+  }
+}
+} finally {
+  await task.finish({ keep: [] }).catch(() => {});
+}
 console.log("RESULT_JSON:" + JSON.stringify({ status: "OK", results }));
 `;
-    const { combined } = await runEgoScript("baidu-intel", code, Math.max(60_000, uniqueNames.length * 15_000));
+    const { combined } = await runEgoScript("baidu-intel", code, Math.max(90_000, uniqueNames.length * 25_000));
     const parsed = parseMarkedJson(combined);
     return parsed.results || {};
   } finally {
@@ -482,15 +528,26 @@ for (let idx = 0; idx < totalTarget + 6 && collected.length < totalTarget; idx++
     const recruiterActive = bossInfo.activeTimeDesc || (cardVue.bossOnline ? "在线" : "") || "";
     const moreHref = detailEl?.querySelector(".more-job-btn")?.getAttribute("href") || cardEl?.querySelector("a.job-name")?.getAttribute("href") || "";
     const externalId = jobInfo.encryptId || cardVue.encryptJobId || moreHref.split("?")[0] || (companyName + "::" + jobTitle);
+    const domAddress = (detailEl?.querySelector(".location-address, .job-address")?.innerText || "")
+      .replace(/^工作地址\\s*/g, "")
+      .replace(/点击查看地图/g, "")
+      .trim();
+    const workAddress = (jobInfo.address || domAddress || "").trim();
+    const areaDistrict = [cardVue.areaDistrict, cardVue.businessDistrict].filter(Boolean).join("·");
 
     return {
       external_id: externalId,
       job_title: jobTitle,
       company_name: companyName,
+      customer_brand: brandComInfo.customerBrandName || "",
       scale,
       financing,
       industry,
       city: jobInfo.locationName || cardVue.cityName || "",
+      area_district: areaDistrict,
+      work_address: workAddress,
+      longitude: jobInfo.longitude ?? null,
+      latitude: jobInfo.latitude ?? null,
       recruiter_title: recruiterTitle,
       recruiter_name: recruiterName,
       recruiter_active: recruiterActive,
@@ -735,6 +792,214 @@ console.log("RESULT_JSON:" + JSON.stringify({ ok: true, path: outFile, bytes: Bu
     const res = parseMarkedJson(combined);
     onLog(`✅ 已导出定制 PDF 简历（${Math.round((res.bytes || 0) / 1024)} KB）`);
     return res;
+  } finally {
+    releaseLock();
+  }
+}
+
+const BAIDU_CITY_CODES = {
+  广州: 257,
+  深圳: 340,
+  北京: 131,
+  上海: 289,
+  杭州: 179,
+  成都: 75,
+};
+
+export async function enrichJobDetailsAndCommuteViaEgo({
+  jobs = [],
+  homeAddress = "",
+  homeCity = "广州",
+  profileId = "Profile 1",
+  fetchMissingAddress = true,
+  onLog = () => {},
+}) {
+  if (!homeAddress) {
+    throw new Error("请先在「巡检计划与设置」填写你的居住地址");
+  }
+  if (!jobs.length) return { homeResolved: null, items: [] };
+
+  acquireLock(`测算办公地点与单车+地铁通勤（${jobs.length} 个岗位）`);
+  try {
+    const cityCode = BAIDU_CITY_CODES[homeCity] || 257;
+    const payloadJobs = jobs.map((j) => ({
+      id: j.id,
+      job_title: j.job_title || "",
+      company_name: j.company_name || "",
+      city: j.city || homeCity,
+      work_address: j.work_address || "",
+      area_district: j.area_district || "",
+      job_url: j.job_url || "",
+    }));
+
+    onLog(`正在检查 ${jobs.length} 个岗位的准确办公地点并用百度地图测算单车+地铁通勤...`);
+    const code = `
+const randDelay = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
+const jobs = ${JSON.stringify(payloadJobs)};
+const homeAddress = ${JSON.stringify(homeAddress)};
+const homeCity = ${JSON.stringify(homeCity)};
+const defaultCityCode = ${cityCode};
+const fetchMissing = ${JSON.stringify(Boolean(fetchMissingAddress))};
+
+const task = await taskSpace("boss-commute-" + Date.now(), { profileId: ${JSON.stringify(profileId)} });
+let homePt = null;
+const items = [];
+try {
+const page = (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
+
+// Step 1: 补充缺少 work_address 的 Boss 岗位详情地址
+let bossBlocked = false;
+if (fetchMissing) {
+  for (const job of jobs) {
+    if (job.work_address || !job.job_url || !job.job_url.includes("zhipin.com/job_detail") || bossBlocked) continue;
+    await page.goto(job.job_url, { waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(randDelay(1400, 2100));
+    const detail = await page.evaluate(() => {
+      const body = (document.body?.innerText || "").slice(0, 500);
+      if (/verify-slider|security/i.test(location.href) || /请完成安全验证|拖动滑块|访问异常/.test(body)) {
+        return { blocked: true };
+      }
+      const addrEl = document.querySelector(".location-address, .job-address");
+      const rawAddr = (addrEl?.innerText || "").replace(/^工作地址\\s*/g, "").replace(/点击查看地图/g, "").trim();
+      const mapUrl = document.querySelector(".job-location-map img, img[src*='center=']")?.getAttribute("src") || "";
+      const centerMatch = mapUrl.match(/center=([0-9.]+),([0-9.]+)/);
+      return {
+        blocked: false,
+        work_address: rawAddr,
+        longitude: centerMatch ? Number(centerMatch[1]) : null,
+        latitude: centerMatch ? Number(centerMatch[2]) : null,
+      };
+    }).catch(() => ({ blocked: false }));
+    if (detail.blocked) {
+      bossBlocked = true;
+      console.error("[COMMUTE] Boss detail hit verification, falling back to company name lookup on Baidu Map.");
+      break;
+    } else if (detail.work_address) {
+      job.work_address = detail.work_address;
+      if (detail.longitude) job.longitude = detail.longitude;
+      if (detail.latitude) job.latitude = detail.latitude;
+    }
+  }
+}
+
+// Step 2: 在 map.baidu.com 会话内逐条编码与计算地铁+步行路段（每条独立 evaluate，彻底避免 15s 超时）
+await page.goto("https://map.baidu.com/", { waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {});
+await page.waitForTimeout(900);
+
+homePt = await page.evaluate(async ({ homeAddress, homeCity, defaultCityCode }) => {
+  const geocode = async (wd, c) => {
+    const res = await fetch(\`/?qt=s&wd=\${encodeURIComponent(wd)}&c=\${c}\`).then((r) => r.json()).catch(() => null);
+    const pt = res?.content?.[0];
+    if (!pt || !pt.x || !pt.y) return null;
+    return { name: pt.name || wd, addr: pt.addr || "", x: pt.x / 100, y: pt.y / 100, cityCode: res?.current_city?.code || c };
+  };
+  const homeWd = homeAddress.includes(homeCity) ? homeAddress : \`\${homeCity}\${homeAddress}\`;
+  return (await geocode(homeWd, defaultCityCode)) || (await geocode(homeAddress, defaultCityCode));
+}, { homeAddress, homeCity, defaultCityCode });
+
+for (const job of jobs) {
+  const item = await page.evaluate(async ({ job, homePt, homeCity, defaultCityCode }) => {
+    const cityCodes = { 广州: 257, 深圳: 340, 佛山: 138, 东莞: 119, 珠海: 140, 北京: 131, 上海: 289, 杭州: 179, 成都: 75, 芜湖: 129, 武汉: 218, 南京: 315 };
+    const hintText = \`\${job.work_address || ""} \${job.job_title || ""}\`;
+    let effCity = job.city || homeCity;
+    for (const cname of Object.keys(cityCodes)) {
+      if (hintText.includes(cname)) {
+        effCity = cname;
+        break;
+      }
+    }
+    const cCode = cityCodes[effCity] || defaultCityCode;
+    const fetchJson = async (url) => {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5000);
+      try {
+        return await fetch(url, { signal: ctrl.signal }).then((r) => r.json()).catch(() => null);
+      } finally {
+        clearTimeout(t);
+      }
+    };
+    const geocode = async (wd, c) => {
+      const res = await fetchJson(\`/?qt=s&wd=\${encodeURIComponent(wd)}&c=\${c}\`);
+      const pt = res?.content?.[0];
+      if (!pt || !pt.x || !pt.y) return null;
+      return { name: pt.name || wd, addr: pt.addr || "", x: pt.x / 100, y: pt.y / 100, cityCode: res?.current_city?.code || c };
+    };
+
+    const destQuery = job.work_address
+      ? (job.work_address.includes(effCity) ? job.work_address : \`\${effCity} \${job.work_address}\`)
+      : \`\${effCity} \${job.area_district || ""} \${job.company_name}\`.replace(/\\s+/g, " ").trim();
+
+    let destPt = await geocode(destQuery, cCode);
+    if (!destPt) {
+      destPt = await geocode(\`\${effCity} \${job.company_name}\`, cCode);
+    }
+
+    if (!homePt || !destPt) {
+      return { id: job.id, work_address: job.work_address || "", destPt, route: null };
+    }
+
+    const straightLineM = Math.round(Math.hypot(destPt.x - homePt.x, destPt.y - homePt.y));
+    let bt = null;
+    if (straightLineM <= 95000 && effCity === homeCity) {
+      const btUrl = \`/?qt=bt&c=\${cCode}&sn=1$$$$\${homePt.x},\${homePt.y}$$\${encodeURIComponent(homePt.name)}$$$$&en=1$$$$\${destPt.x},\${destPt.y}$$\${encodeURIComponent(destPt.name)}$$$$&sy=0\`;
+      bt = await fetchJson(btUrl);
+    }
+    const c0 = bt?.content?.[0];
+    const ext = c0?.exts?.[0] || null;
+    const lines = (c0?.lines?.[0] || []).filter((l) => l && l.name).map((l) => l.name);
+
+    return {
+      id: job.id,
+      work_address: job.work_address || destPt.addr || destPt.name || "",
+      dest_name: destPt.name || "",
+      dest_addr: destPt.addr || "",
+      longitude: job.longitude ?? null,
+      latitude: job.latitude ?? null,
+      straightLineM,
+      route: ext ? {
+        distanceM: ext.distance || 0,
+        totalSec: ext.time || 0,
+        walkDistanceM: ext.walk_distance || 0,
+        walkSec: ext.walk_time || 0,
+        priceFen: ext.price || 0,
+        lines,
+      } : null,
+    };
+  }, { job, homePt, homeCity, defaultCityCode }).catch((err) => ({
+    id: job.id,
+    work_address: job.work_address || "",
+    route: null,
+    error: String(err?.message || err),
+  }));
+  items.push(item);
+}
+} finally {
+  await task.finish({ keep: [] }).catch(() => {});
+}
+console.log("RESULT_JSON:" + JSON.stringify({ status: "OK", homePt, items }));
+`;
+    const { combined, stderr } = await runEgoScript("enrich-commute", code, Math.max(90_000, jobs.length * 12_000));
+    if (stderr) {
+      for (const line of stderr.split(/\r?\n/).filter((l) => l && !l.startsWith("RESULT_JSON:"))) onLog(line);
+    }
+    const raw = parseMarkedJson(combined);
+    const enriched = (raw.items || []).map((it) => {
+      const calc = it.route
+        ? calculateBikePlusMetroMetrics({ ...it.route, straightLineM: it.straightLineM })
+        : calculateBikePlusMetroMetrics({ straightLineM: it.straightLineM || 0 });
+      return {
+        ...it,
+        commute: {
+          ...calc,
+          home_address: homeAddress,
+          home_resolved: raw.homePt?.addr || raw.homePt?.name || homeAddress,
+          dest_address: it.work_address || it.dest_addr || it.dest_name || "",
+          computed_at: new Date().toISOString(),
+        },
+      };
+    });
+    onLog(`✅ 已完成 ${enriched.length} 个岗位的单车+地铁通勤测算`);
+    return { homeResolved: raw.homePt, items: enriched };
   } finally {
     releaseLock();
   }

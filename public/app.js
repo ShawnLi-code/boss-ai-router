@@ -76,6 +76,7 @@ const els = {
   cntIdeal: document.getElementById("cnt-ideal"),
   cntFiltered: document.getElementById("cnt-filtered"),
   btnPurgeFiltered: document.getElementById("btn-purge-filtered"),
+  btnCalcCommute: document.getElementById("btn-calc-commute"),
   jobSearchInput: document.getElementById("job-search-input"),
   jobSortSelect: document.getElementById("job-sort-select"),
   jobListPane: document.getElementById("job-list-pane"),
@@ -372,6 +373,18 @@ function zoneTagHtml(zone, score) {
   return `<span class="zone-tag zone-${esc(zone)}"><span class="zone-dot" aria-hidden="true"></span>${esc(text)}</span>`;
 }
 
+function commuteTagHtml(job) {
+  const c = job.commute;
+  if (!c || c.status !== "DONE" || c.effective_min == null) return "";
+  if (c.effective_min >= 900 || c.tier_label === "异地/超远") {
+    const distTxt = c.distance_km ? `·${c.distance_km}km` : "";
+    return `<span class="zone-tag commute-EXTREME">异地${esc(distTxt)}</span>`;
+  }
+  const modeTxt = c.prefer_direct_bike ? `骑行${c.effective_min}分` : `单车+地铁${c.effective_min}分`;
+  const distTxt = c.distance_km ? `·${c.distance_km}km` : "";
+  return `<span class="zone-tag commute-${esc(c.tier || "MODERATE")}">${esc(modeTxt + distTxt)}</span>`;
+}
+
 function getFilteredSortedJobs() {
   const all = state.data?.jobs || [];
   let list = all.filter((j) => {
@@ -394,6 +407,12 @@ function getFilteredSortedJobs() {
 
   if (state.sortBy === "match") {
     list = [...list].sort((a, b) => (b.match_score || 0) - (a.match_score || 0) || b.id - a.id);
+  } else if (state.sortBy === "commute") {
+    list = [...list].sort((a, b) => {
+      const am = a.commute?.status === "DONE" && a.commute.effective_min != null ? a.commute.effective_min : 9999;
+      const bm = b.commute?.status === "DONE" && b.commute.effective_min != null ? b.commute.effective_min : 9999;
+      return am - bm || (b.match_score || 0) - (a.match_score || 0);
+    });
   } else if (state.sortBy === "recent") {
     list = [...list].sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")) || b.id - a.id);
   } else if (state.sortBy === "risk") {
@@ -417,15 +436,17 @@ function renderJobList() {
         ? (j.filter_reason || "已过滤杂岗")
         : (j.match?.eligibility?.exp_badge || j.experience_req || "");
       const srcTag = j.matched_query ? `${j.matched_query}` : "";
+      const locSub = j.area_district || (j.work_address ? j.work_address.slice(0, 14) : "");
       return `
         <button type="button" class="job-row" role="option" aria-selected="${selected}" data-select-job="${j.id}">
           <div class="job-row-top">
             <span class="job-row-title">${esc(j.job_title)}</span>
             <span class="job-row-salary">${esc(j.salary_range || "面议")}</span>
           </div>
-          <div class="job-row-sub">${esc(j.company_name)} · ${esc(j.experience_req || "经验不限")} · ${esc(j.scale || "规模未知")} · ${esc(j.recruiter_active || j.recruiter_title || "未知")}</div>
+          <div class="job-row-sub">${esc(j.company_name)}${locSub ? ` · ${esc(locSub)}` : ""} · ${esc(j.experience_req || "经验不限")} · ${esc(j.recruiter_active || j.recruiter_title || "未知")}</div>
           <div class="job-row-meta">
             ${j.filter_status === "FILTERED" ? `<span class="meta-pill">${esc(expBadge)}</span>` : adviceTagHtml(adv, j.match_score || 0)}
+            ${commuteTagHtml(j)}
             ${j.filter_status !== "FILTERED" && expBadge ? `<span class="meta-pill">${esc(expBadge)}</span>` : ""}
             ${zoneTagHtml(j.zone, j.risk_score)}
             ${srcTag ? `<span class="meta-pill">${esc(srcTag)}</span>` : ""}
@@ -493,24 +514,40 @@ async function renderInspector(fetchFresh = false) {
 
   const tailored = job.tailored_resume || {};
   const factGuard = tailored.fact_guard || { passed: true, issues: [] };
-  const snippets = job.intel?.snippets || [];
+  const intel = job.intel || {};
+  const snippets = intel.snippets || [];
+  const regName = intel.registered_name || "";
+  const credit = intel.credit || {};
+  const rep = intel.reputation || {};
+  const commute = job.commute || {};
+  const lookupEntity = regName || job.company_name;
   const conflict = (job.company_history || []).find((h) => h.profile_id !== preferredProfile);
 
   els.jobInspectorPane.innerHTML = `
     <div class="inspector-head">
       <div>
-        <h2 class="inspector-title">${esc(job.job_title)} · ${esc(job.company_name)}</h2>
+        <h2 class="inspector-title">${esc(job.job_title)} · ${esc(job.company_name)}${regName && regName !== job.company_name ? ` <span class="muted" style="font-size:12px;font-weight:500;">(${esc(regName)})</span>` : ""}</h2>
         <p class="inspector-sub">
           ${esc(job.salary_range || "薪资未标")} · ${esc(job.experience_req || "经验不限")} · ${esc(job.education_req || "学历不限")} · ${esc(job.scale || "规模未知")} · ${esc(job.financing || "融资未知")} · ${esc(job.recruiter_title || "招聘人")} (${esc(job.recruiter_active || "活跃未知")})
         </p>
       </div>
       <div class="inspector-controls">
         ${adviceTagHtml(applyAdvice, job.match_score || 0)}
+        ${commuteTagHtml(job)}
         ${zoneTagHtml(job.zone, job.risk_score)}
         <button type="button" class="btn btn-secondary btn-xs" id="insp-open-page">Ego 打开</button>
         ${job.filter_status === "FILTERED" ? `<button type="button" class="btn btn-secondary btn-xs" id="insp-restore-btn">放行回精选</button>` : `<button type="button" class="btn btn-ghost btn-xs" id="insp-filter-out-btn">标记杂岗</button>`}
         <button type="button" class="btn btn-ghost btn-xs" id="insp-ban-btn">拉黑</button>
       </div>
+    </div>
+
+    <div class="commute-strip">
+      <div>
+        <strong>地点与单车+地铁：</strong>
+        <span>${esc(job.work_address || job.area_district || "尚未抓取具体街道")}</span>
+        <span class="muted" style="margin-left:8px;">${esc(commute.status === "DONE" ? commute.summary : "点击右侧按居住地址测算单车+地铁真实耗时")}</span>
+      </div>
+      <button type="button" class="btn btn-secondary btn-xs" id="insp-calc-commute" style="flex:none;">测算单车+地铁</button>
     </div>
 
     ${job.filter_status === "FILTERED" ? `<div class="alert-strip alert-warn" style="border-radius:8px;"><span><strong>自动精筛已过滤：</strong>${esc(job.filter_reason || "非测试相关或经验超档")}</span></div>` : ""}
@@ -621,14 +658,26 @@ async function renderInspector(fetchFresh = false) {
     <div role="tabpanel" aria-labelledby="itab-risk" ${state.inspectorTab === "risk" ? "" : "hidden"}>
       <div class="panel-inner">
         <div class="surface-box">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <strong>背调风险辅助评估（${esc(job.zone)} · ${esc(job.risk_score)} 分）</strong>
-            <button type="button" class="btn btn-secondary btn-xs" id="insp-refresh-intel">重新联网补查</button>
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+            <strong>三段式企业尽调与背调风控（${esc(job.zone)} · ${esc(job.risk_score)} 分）</strong>
+            <div class="intel-links">
+              <a class="btn btn-ghost btn-xs" href="https://aiqicha.baidu.com/s?q=${encodeURIComponent(lookupEntity)}" target="_blank" rel="noreferrer">爱企查工商</a>
+              <a class="btn btn-ghost btn-xs" href="https://www.tianyancha.com/search?key=${encodeURIComponent(lookupEntity)}" target="_blank" rel="noreferrer">天眼查诉讼</a>
+              <a class="btn btn-ghost btn-xs" href="https://www.zhihu.com/search?q=${encodeURIComponent(lookupEntity + " 怎么样 背调")}" target="_blank" rel="noreferrer">知乎风评</a>
+              <button type="button" class="btn btn-secondary btn-xs" id="insp-refresh-intel">深度联网尽调</button>
+            </div>
+          </div>
+          <div style="font-size:12.5px;display:flex;flex-wrap:wrap;gap:8px;">
+            <span class="meta-pill">工商主体：${esc(regName || "点击「深度联网尽调」自动识别全称")}</span>
+            ${credit.established_year ? `<span class="meta-pill">成立：${esc(credit.established_year)}年</span>` : ""}
+            ${credit.registered_capital ? `<span class="meta-pill">注册：${esc(credit.registered_capital)}</span>` : ""}
+            ${credit.paid_capital ? `<span class="meta-pill">实缴：${esc(credit.paid_capital)}</span>` : ""}
+            ${rep.negative_tags?.length ? `<span class="zone-tag zone-RED">雷区预警：${esc(rep.negative_tags.join("、"))}</span>` : ""}
           </div>
           <ul class="evidence-list">
             ${(job.evidence || []).map((ev) => `<li>${esc(ev)}</li>`).join("")}
           </ul>
-          <p class="muted">背调摘要：${esc(job.intel?.summary || job.intel_summary || "尚未补查")}</p>
+          <p class="muted">尽调结论：${esc(intel.summary || job.intel_summary || "尚未补查")}</p>
           ${snippets.length ? `<ul class="evidence-list">${snippets.map((s) => `<li><a href="${esc(s.url)}" target="_blank" rel="noreferrer">${esc(s.title)}</a><br><span class="muted">${esc(s.snippet)}</span></li>`).join("")}</ul>` : ""}
         </div>
       </div>
@@ -723,11 +772,24 @@ async function renderInspector(fetchFresh = false) {
   });
 
   document.getElementById("insp-refresh-intel").addEventListener("click", async () => {
-    setWorkerBusy(true, "正在联网补查背调舆情...");
+    setWorkerBusy(true, "正在进行工商+背调+口碑三段式尽调...");
     try {
       await api(`/api/jobs/${job.id}/intel`, { method: "POST" });
       await refreshState();
       await renderInspector(true);
+    } finally {
+      setWorkerBusy(false);
+    }
+  });
+
+  document.getElementById("insp-calc-commute")?.addEventListener("click", async () => {
+    setWorkerBusy(true, "正在测算地址与单车+地铁通勤...");
+    try {
+      await api(`/api/jobs/${job.id}/commute`, { method: "POST" });
+      await refreshState();
+      await renderInspector(true);
+    } catch (err) {
+      alert(err.message);
     } finally {
       setWorkerBusy(false);
     }
@@ -1007,6 +1069,8 @@ function renderSettings() {
 
   const form = els.settingsForm;
   form.watchlist_text.value = state.watchlist.join("、");
+  form.home_address.value = settings.home_address || "";
+  form.home_city.value = settings.home_city || "广州";
   form.daily_check_enabled.value = settings.daily_check_enabled || "true";
   form.daily_check_time.value = settings.daily_check_time || "09:30";
   form.scan_mode.value = settings.scan_mode === "single" ? "single" : "both";
@@ -1197,6 +1261,19 @@ els.btnPurgeFiltered.addEventListener("click", async () => {
   if (!confirm(`确定从本地数据库清理掉这 ${cnt} 条已过滤的实习/开发/产品/超龄杂岗吗？（已投递或人工放行的不会删除）`)) return;
   await api("/api/jobs/purge-filtered", { method: "POST" });
   await refreshState();
+});
+
+els.btnCalcCommute.addEventListener("click", async () => {
+  setWorkerBusy(true, "正在补全办公地址并测算单车+地铁通勤...");
+  try {
+    const res = await api("/api/jobs/enrich-commute", { method: "POST", body: JSON.stringify({}) });
+    await refreshState();
+    els.liveLogLatest.textContent = `已完成 ${res.updated} 个精选岗位的单车+地铁通勤测算`;
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    setWorkerBusy(false);
+  }
 });
 
 els.btnOpenImport.addEventListener("click", () => els.importModal.showModal());

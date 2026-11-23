@@ -440,28 +440,37 @@ html, body {
 
 /* Right Inspector Pane */
 .job-inspector-pane {
+  min-width: 0;
+  overflow-x: hidden;
   overflow-y: auto;
-  padding: 20px 26px 36px;
+  padding: 20px 24px 36px;
   background: var(--bg-canvas);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
 .inspector-head {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 14px;
+  gap: 10px 14px;
   padding-bottom: 14px;
   border-bottom: 1px solid var(--border-line);
 }
 
+.inspector-head > div:first-child {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
 .inspector-title {
   margin: 0;
-  font-size: 17px;
+  font-size: 16.5px;
   font-weight: 700;
   letter-spacing: -0.02em;
+  word-break: break-word;
 }
 
 .inspector-sub {
@@ -472,11 +481,9 @@ html, body {
 
 .inspector-controls {
   display: flex;
-  flex-wrap: nowrap;
-  flex: none;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
   align-items: center;
-  white-space: nowrap;
 }
 
 /* Inspector Sub-tabs */
@@ -670,6 +677,31 @@ html, body {
   border-color: var(--accent-teal);
   color: var(--accent-teal);
   background: var(--accent-teal-bg);
+}
+.commute-NEAR { color: var(--green-fg); background: var(--green-bg); }
+.commute-MODERATE { color: var(--accent-teal); background: var(--accent-teal-bg); }
+.commute-FAR { color: var(--yellow-fg); background: var(--yellow-bg); }
+.commute-EXTREME { color: var(--red-fg); background: var(--red-bg); }
+.commute-strip {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-line);
+  font-size: 12px;
+}
+.commute-strip > div {
+  min-width: 0;
+  flex: 1;
+  word-break: break-word;
+}
+.intel-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .meta-pill {

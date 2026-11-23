@@ -108,6 +108,7 @@ export function parseJobStructure(job) {
   const combinedText = `${company}\n${industry}\n${title}\n${jd}\n${companyIntro}`;
   const soeFinanceHits = hasUnnegatedKeyword(combinedText, SOE_FINANCE_KEYWORDS);
   const vendorHits = OUTSOURCING_VENDORS.filter((v) => company.includes(v));
+  const proxyCustomerHit = job.customer_brand && job.customer_brand !== company ? [`代招甲方:${job.customer_brand}`] : [];
   const outsourcingJdHits = hasUnnegatedKeyword(`${title}\n${jd}\n${industry}\n${companyIntro}`, [
     ...OUTSOURCING_JD_KEYWORDS,
     "人才外包",
@@ -117,7 +118,7 @@ export function parseJobStructure(job) {
   ]);
 
   const isSoeOrFinance = soeFinanceHits.length > 0;
-  const isOutsourcing = vendorHits.length > 0 || outsourcingJdHits.length > 0;
+  const isOutsourcing = vendorHits.length > 0 || outsourcingJdHits.length > 0 || proxyCustomerHit.length > 0;
 
   const isIpo = FINANCING_IPO.some((k) => financing.toUpperCase().includes(k.toUpperCase()));
   const isBPlus = FINANCING_B_PLUS.some((k) => financing.toUpperCase().includes(k.toUpperCase()));
@@ -134,7 +135,7 @@ export function parseJobStructure(job) {
     is_soe_or_finance: isSoeOrFinance,
     soe_finance_hits: soeFinanceHits,
     is_outsourcing: isOutsourcing,
-    outsourcing_hits: [...vendorHits, ...outsourcingJdHits],
+    outsourcing_hits: [...vendorHits, ...outsourcingJdHits, ...proxyCustomerHit],
     is_ipo: isIpo,
     is_b_plus: isBPlus,
     recruiter_role: isTechDirectHire ? "技术直招" : isHrBpOrHeadhunter ? "HRBP/猎头" : "常规招聘者",
@@ -253,6 +254,21 @@ export function evaluateJobRisk(job, intel = null, { blacklisted = null } = {}) 
     recommended_track = "先探底后定轨";
   }
 
+  if (intel?.registered_name && intel.registered_name !== job.company_name) {
+    evidence.push(`🏢 工商全称核验：${intel.registered_name}`);
+  }
+  if (intel?.credit?.established_year || intel?.credit?.paid_capital || intel?.credit?.warnings?.length) {
+    const parts = [
+      intel.credit.established_year ? `${intel.credit.established_year}年成立` : "",
+      intel.credit.registered_capital ? `注册${intel.credit.registered_capital}` : "",
+      intel.credit.paid_capital ? `实缴${intel.credit.paid_capital}` : "",
+      ...(intel.credit.warnings || []),
+    ].filter(Boolean);
+    if (parts.length) evidence.push(`🏛️ 企业资质：${parts.join(" · ")}`);
+  }
+  if (intel?.reputation?.negative_tags?.length) {
+    evidence.push(`⚠️ 职场风评预警：命中 ${intel.reputation.negative_tags.join("、")}`);
+  }
   if (intel?.summary) {
     evidence.push(`舆情摘要：${intel.summary}`);
   }
@@ -263,5 +279,6 @@ export function evaluateJobRisk(job, intel = null, { blacklisted = null } = {}) 
     zone,
     recommended_track,
     evidence,
+    company_health: intel?.reputation?.health_level || "UNKNOWN",
   };
 }

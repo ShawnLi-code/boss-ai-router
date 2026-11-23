@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { evaluateJobRisk, shouldTriggerWebSearch } from "../src/scoring.mjs";
 import { analyzeSearchSnippets } from "../src/websearch.mjs";
 import { DEFAULT_TARGET_ROLES, evaluateJobEligibility, factGuardCheck, matchResumeToJob } from "../src/matcher.mjs";
+import { calculateBikePlusMetroMetrics } from "../src/commute.mjs";
 import { normalizeCompanyRoot } from "../src/db.mjs";
 import { compareSemver } from "../src/updater.mjs";
 
@@ -357,6 +358,66 @@ test("短JD非测试岗不得再触发默认高分假象", () => {
   assert.ok(m.match_score < 35, `expected <35 for off-domain PM job, got ${m.match_score}`);
   assert.equal(m.eligibility.eligible, false);
 });
+
+test("单车+地铁通勤模型：正确计算接驳节省时间与分级", () => {
+  const metro = calculateBikePlusMetroMetrics({
+    distanceM: 22591,
+    totalSec: 3928,
+    walkDistanceM: 2410,
+    walkSec: 2008,
+    priceFen: 600,
+    straightLineM: 12800,
+    lines: ["地铁13号线(天河公园-新沙)", "地铁7号线(燕山-美的大道)"],
+  });
+  assert.equal(metro.status, "DONE");
+  assert.equal(metro.prefer_direct_bike, false);
+  assert.ok(metro.bike_metro_min < metro.walk_metro_min);
+  assert.ok(metro.saved_min >= 15);
+  assert.equal(metro.tier, "MODERATE");
+
+  const near = calculateBikePlusMetroMetrics({
+    distanceM: 2800,
+    totalSec: 2100,
+    walkDistanceM: 1200,
+    walkSec: 900,
+    straightLineM: 2200,
+    lines: ["地铁5号线"],
+  });
+  assert.equal(near.prefer_direct_bike, true);
+  assert.equal(near.tier, "NEAR");
+});
+
+test("三段式企业尽调解析：提取工商全称、实缴资本与职场负面标签", () => {
+  const res = analyzeSearchSnippets("示例游戏", {
+    creditItems: [
+      {
+        title: "深圳示例科技有限公司 - 天眼查",
+        snippet: "深圳示例科技有限公司成立于2018年，注册资本10万人民币，实缴资本0万人民币。",
+        url: "https://example.com/tyc",
+      },
+    ],
+    bgItems: [
+      {
+        title: "深圳示例科技有限公司入职背调",
+        snippet: "深圳示例科技有限公司没有第三方背调。",
+        url: "https://example.com/bg",
+      },
+    ],
+    repItems: [
+      {
+        title: "在深圳示例科技有限公司工作怎么样 - 知乎",
+        snippet: "深圳示例科技有限公司经常拖欠工资，内部PUA严重且大裁员。",
+        url: "https://example.com/zhihu",
+      },
+    ],
+  });
+  assert.equal(res.registered_name, "深圳示例科技有限公司");
+  assert.equal(res.credit.established_year, "2018");
+  assert.equal(res.credit.shell_risk, true);
+  assert.ok(res.reputation.negative_tags.includes("欠薪/拖欠工资"));
+  assert.equal(res.reputation.health_level, "DANGER");
+});
+
 
 
 

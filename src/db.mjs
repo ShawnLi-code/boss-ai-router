@@ -60,6 +60,9 @@ db.exec(`
     matched_vendors_json TEXT NOT NULL DEFAULT '[]',
     matched_signals_json TEXT NOT NULL DEFAULT '[]',
     snippets_json TEXT NOT NULL DEFAULT '[]',
+    registered_name TEXT NOT NULL DEFAULT '',
+    credit_json TEXT NOT NULL DEFAULT '{}',
+    reputation_json TEXT NOT NULL DEFAULT '{}',
     summary TEXT NOT NULL DEFAULT '',
     searched_at TEXT NOT NULL
   );
@@ -107,6 +110,12 @@ db.exec(`
     apply_advice TEXT NOT NULL DEFAULT 'REVISE_FIRST',
     filter_status TEXT NOT NULL DEFAULT 'PASS',
     filter_reason TEXT NOT NULL DEFAULT '',
+    work_address TEXT NOT NULL DEFAULT '',
+    area_district TEXT NOT NULL DEFAULT '',
+    longitude REAL,
+    latitude REAL,
+    customer_brand TEXT NOT NULL DEFAULT '',
+    commute_json TEXT NOT NULL DEFAULT '{}',
     custom_greeting TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'NEW',
     notes TEXT NOT NULL DEFAULT '',
@@ -144,8 +153,17 @@ ensureColumn("jobs", "recruiter_active", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("jobs", "company_intro", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("jobs", "matched_query", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("jobs", "apply_advice", "TEXT NOT NULL DEFAULT 'REVISE_FIRST'");
+ensureColumn("company_intel", "registered_name", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("company_intel", "credit_json", "TEXT NOT NULL DEFAULT '{}'");
+ensureColumn("company_intel", "reputation_json", "TEXT NOT NULL DEFAULT '{}'");
 ensureColumn("jobs", "filter_status", "TEXT NOT NULL DEFAULT 'PASS'");
 ensureColumn("jobs", "filter_reason", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("jobs", "work_address", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("jobs", "area_district", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("jobs", "longitude", "REAL");
+ensureColumn("jobs", "latitude", "REAL");
+ensureColumn("jobs", "customer_brand", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("jobs", "commute_json", "TEXT NOT NULL DEFAULT '{}'");
 ensureColumn("delivery_logs", "normalized_company", "TEXT NOT NULL DEFAULT ''");
 
 const now = () => new Date().toISOString();
@@ -233,6 +251,8 @@ function seedDefaults() {
     filter_exclude_intern: "true",
     filter_exclude_non_qa: "true",
     filter_exp_mode: "prefer_1_3_allow_3_5",
+    home_address: "",
+    home_city: "广州",
     daily_check_enabled: "true",
     daily_check_time: "09:30",
     last_daily_check_date: "",
@@ -447,14 +467,16 @@ export function getCompanyIntel(companyName) {
     matched_vendors: safeJson(row.matched_vendors_json, []),
     matched_signals: safeJson(row.matched_signals_json, []),
     snippets: safeJson(row.snippets_json, []),
+    credit: safeJson(row.credit_json, {}),
+    reputation: safeJson(row.reputation_json, {}),
   };
 }
 
 export function saveCompanyIntel(intel) {
   const ts = now();
   db.prepare(`
-    INSERT INTO company_intel (company_name, query, search_status, hit_background_check, matched_vendors_json, matched_signals_json, snippets_json, summary, searched_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO company_intel (company_name, query, search_status, hit_background_check, matched_vendors_json, matched_signals_json, snippets_json, registered_name, credit_json, reputation_json, summary, searched_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(company_name) DO UPDATE SET
       query = excluded.query,
       search_status = excluded.search_status,
@@ -462,6 +484,9 @@ export function saveCompanyIntel(intel) {
       matched_vendors_json = excluded.matched_vendors_json,
       matched_signals_json = excluded.matched_signals_json,
       snippets_json = excluded.snippets_json,
+      registered_name = excluded.registered_name,
+      credit_json = excluded.credit_json,
+      reputation_json = excluded.reputation_json,
       summary = excluded.summary,
       searched_at = excluded.searched_at
   `).run(
@@ -472,6 +497,9 @@ export function saveCompanyIntel(intel) {
     JSON.stringify(intel.matched_vendors ?? []),
     JSON.stringify(intel.matched_signals ?? []),
     JSON.stringify(intel.snippets ?? []),
+    intel.registered_name ?? "",
+    JSON.stringify(intel.credit ?? {}),
+    JSON.stringify(intel.reputation ?? {}),
     intel.summary ?? "",
     ts
   );
@@ -513,7 +541,14 @@ export function upsertJob(job) {
         assigned_profile_id = COALESCE(assigned_profile_id, ?),
         evidence_json = ?, intel_summary = ?, match_score = ?, match_json = ?,
         tailored_resume_json = ?, matched_query = CASE WHEN ? != '' THEN ? ELSE matched_query END,
-        apply_advice = ?, filter_status = ?, filter_reason = ?, custom_greeting = ?,
+        apply_advice = ?, filter_status = ?, filter_reason = ?,
+        work_address = CASE WHEN ? != '' THEN ? ELSE work_address END,
+        area_district = CASE WHEN ? != '' THEN ? ELSE area_district END,
+        longitude = COALESCE(?, longitude),
+        latitude = COALESCE(?, latitude),
+        customer_brand = CASE WHEN ? != '' THEN ? ELSE customer_brand END,
+        commute_json = CASE WHEN ? != '{}' THEN ? ELSE commute_json END,
+        custom_greeting = ?,
         status = CASE WHEN status = 'NEW' AND ? = 'SKIP' THEN 'SKIP' ELSE status END,
         updated_at = ?
       WHERE id = ?
@@ -547,6 +582,16 @@ export function upsertJob(job) {
       job.apply_advice ?? "REVISE_FIRST",
       job.filter_status ?? "PASS",
       job.filter_reason ?? "",
+      job.work_address ?? "",
+      job.work_address ?? "",
+      job.area_district ?? "",
+      job.area_district ?? "",
+      job.longitude ?? null,
+      job.latitude ?? null,
+      job.customer_brand ?? "",
+      job.customer_brand ?? "",
+      JSON.stringify(job.commute ?? {}),
+      JSON.stringify(job.commute ?? {}),
       job.custom_greeting ?? "",
       job.zone ?? "GREEN",
       ts,
@@ -563,8 +608,10 @@ export function upsertJob(job) {
       jd_text, company_intro, job_url, source_profile_id, parsed_json, risk_score, zone,
       recommended_track, manual_track, assigned_profile_id, evidence_json,
       intel_summary, match_score, match_json, tailored_resume_json,
-      matched_query, apply_advice, filter_status, filter_reason, custom_greeting, status, notes, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      matched_query, apply_advice, filter_status, filter_reason,
+      work_address, area_district, longitude, latitude, customer_brand, commute_json,
+      custom_greeting, status, notes, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     externalId,
     job.job_title ?? "AI测试工程师",
@@ -599,6 +646,12 @@ export function upsertJob(job) {
     job.apply_advice ?? "REVISE_FIRST",
     job.filter_status ?? "PASS",
     job.filter_reason ?? "",
+    job.work_address ?? "",
+    job.area_district ?? "",
+    job.longitude ?? null,
+    job.latitude ?? null,
+    job.customer_brand ?? "",
+    JSON.stringify(job.commute ?? {}),
     job.custom_greeting ?? "",
     initialStatus,
     job.notes ?? "",
@@ -619,6 +672,10 @@ export function updateJobRouting(id, patch) {
       notes = COALESCE(?, notes),
       filter_status = COALESCE(?, filter_status),
       filter_reason = COALESCE(?, filter_reason),
+      work_address = COALESCE(?, work_address),
+      longitude = COALESCE(?, longitude),
+      latitude = COALESCE(?, latitude),
+      commute_json = COALESCE(?, commute_json),
       tailored_resume_json = COALESCE(?, tailored_resume_json),
       updated_at = ?
     WHERE id = ?
@@ -630,6 +687,10 @@ export function updateJobRouting(id, patch) {
     patch.notes ?? null,
     patch.filter_status ?? null,
     patch.filter_reason ?? null,
+    patch.work_address ?? null,
+    patch.longitude ?? null,
+    patch.latitude ?? null,
+    patch.commute ? JSON.stringify(patch.commute) : null,
     patch.tailored_resume ? JSON.stringify(patch.tailored_resume) : null,
     ts,
     id
@@ -727,6 +788,7 @@ function hydrateJob(row) {
     evidence: safeJson(row.evidence_json, []),
     match: safeJson(row.match_json, {}),
     tailored_resume: safeJson(row.tailored_resume_json, {}),
+    commute: safeJson(row.commute_json, {}),
   };
 }
 
