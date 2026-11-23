@@ -870,7 +870,7 @@ export function getScrapeTelemetry() {
   const settings = getSettings();
   const tracks = getAccountTracks();
   const kws = safeJson(settings.watchlist_keywords, []);
-  const maxPerKw = Math.max(1, Math.min(12, Number(settings.scrape_max_jobs || 5)));
+  const maxPerKw = Math.max(1, Math.min(25, Number(settings.scrape_max_jobs || 5)));
   const profilesCount = settings.scan_mode === "both" ? Math.max(1, tracks.length || 2) : 1;
   const plannedQuota = kws.length * maxPerKw * profilesCount;
   const todayLocal = new Date().toLocaleDateString("sv-SE");

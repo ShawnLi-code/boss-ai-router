@@ -1199,6 +1199,9 @@ setInterval(() => {
   } catch {}
 }, 60_000).unref();
 
+server.requestTimeout = 0;
+server.headersTimeout = 0;
+
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Boss AI Router v${getCurrentVersion()} running at http://127.0.0.1:${PORT}`);
 });

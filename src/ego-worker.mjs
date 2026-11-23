@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -25,24 +25,74 @@ function releaseLock() {
   activeLock = null;
 }
 
-function runEgoScript(scriptName, code, timeoutMs = 180_000) {
+function runEgoScript(scriptName, code, timeoutMs = 180_000, { onLine = null } = {}) {
   const filePath = path.join(RUNS_DIR, `${Date.now()}-${scriptName}.mjs`);
   fs.writeFileSync(filePath, code, "utf8");
   const entry = `await import('${pathToFileURL(filePath).href}')`;
 
-  return new Promise((resolve, reject) => {
-    execFile(
-      "ego-browser",
-      ["nodejs", "-e", entry],
-      { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 },
-      (err, stdout, stderr) => {
-        const combined = [stdout, stderr].filter(Boolean).join("\n");
-        if (err) {
-          return reject(new Error(`${err.message}\n${combined}`.trim()));
+  if (!onLine) {
+    return new Promise((resolve, reject) => {
+      execFile(
+        "ego-browser",
+        ["nodejs", "-e", entry],
+        { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 },
+        (err, stdout, stderr) => {
+          const combined = [stdout, stderr].filter(Boolean).join("\n");
+          if (err) {
+            return reject(new Error(`${err.message}\n${combined}`.trim()));
+          }
+          resolve({ stdout: stdout || "", stderr: stderr || "", combined });
         }
-        resolve({ stdout: stdout || "", stderr: stderr || "", combined });
+      );
+    });
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn("ego-browser", ["nodejs", "-e", entry], { windowsHide: true });
+    let stdout = "";
+    let stderr = "";
+    let bufOut = "";
+    let bufErr = "";
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { child.kill(); } catch {}
+    }, timeoutMs);
+
+    const flushLines = (chunk, isErr) => {
+      const text = chunk.toString("utf8");
+      if (isErr) {
+        stderr += text;
+        bufErr += text;
+        const parts = bufErr.split(/\r?\n/);
+        bufErr = parts.pop() || "";
+        for (const l of parts) if (l) onLine(l, "stderr");
+      } else {
+        stdout += text;
+        bufOut += text;
+        const parts = bufOut.split(/\r?\n/);
+        bufOut = parts.pop() || "";
+        for (const l of parts) if (l) onLine(l, "stdout");
       }
-    );
+    };
+
+    child.stdout?.on("data", (c) => flushLines(c, false));
+    child.stderr?.on("data", (c) => flushLines(c, true));
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (bufOut) onLine(bufOut, "stdout");
+      if (bufErr) onLine(bufErr, "stderr");
+      const combined = [stdout, stderr].filter(Boolean).join("\n");
+      if (code === 0 || timedOut) {
+        resolve({ stdout, stderr, combined, timedOut, exitCode: code });
+      } else {
+        reject(new Error(`ego-browser exited with code ${code}\n${combined}`.trim()));
+      }
+    });
   });
 }
 
@@ -486,8 +536,9 @@ let scannedIdx = 0;
 try {
 const page = (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
 await page.goto(${JSON.stringify(searchUrl)}, { waitUntil: "domcontentloaded", timeout: 30000 });
-await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-await page.waitForTimeout(randDelay(2500, 4200));
+await page.waitForSelector(".job-card-wrap", { timeout: 10000 }).catch(() => {});
+await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
+await page.waitForTimeout(randDelay(2200, 3600));
 
 async function checkVerify() {
   return await page.evaluate(() => {
@@ -720,6 +771,7 @@ for (let idx = 0; idx < maxScanCards && collected.length < totalTarget && detail
   if (item && item.company_name && item.job_title && !seenIds.has(item.external_id)) {
     seenIds.add(item.external_id);
     collected.push(item);
+    console.log("ITEM_JSON:" + JSON.stringify(item));
     console.error(\`[SCRAPED \${collected.length}/\${totalTarget}] \${item.company_name} | \${item.job_title} | \${item.salary_range}\`);
   }
 }
@@ -736,11 +788,38 @@ console.log("RESULT_JSON:" + JSON.stringify({
   stats: { scannedCards: scannedIdx, detailClicks, skippedExisting, skippedPreFilter },
 }));
 `;
-    const { combined, stderr } = await runEgoScript("scrape-jobs", code, Math.max(360_000, safeClickBudget * 18_000));
-    if (stderr) {
-      for (const line of stderr.split(/\r?\n/).filter((l) => l && !l.startsWith("RESULT_JSON:"))) onLog(line);
+    const streamedJobs = [];
+    const { combined, timedOut } = await runEgoScript(
+      "scrape-jobs",
+      code,
+      Math.max(480_000, safeClickBudget * 28_000),
+      {
+        onLine: (line, src) => {
+          if (line.startsWith("ITEM_JSON:")) {
+            try { streamedJobs.push(JSON.parse(line.slice("ITEM_JSON:".length))); } catch {}
+          } else if (line.startsWith("RESULT_JSON:")) {
+            // handled after exit
+          } else if (src === "stderr" || line.startsWith("[")) {
+            onLog(line);
+          }
+        },
+      }
+    );
+    let res;
+    try {
+      res = parseMarkedJson(combined);
+    } catch (parseErr) {
+      if (streamedJobs.length > 0 || timedOut) {
+        onLog(`⏱️ 采集接近单批时间保护线，已自动抢救保留已读到的 ${streamedJobs.length} 条新岗位！`, "warn");
+        return {
+          status: "OK",
+          taskSpaceId: null,
+          jobs: streamedJobs,
+          stats: { scannedCards: 0, detailClicks: streamedJobs.length, skippedExisting: 0, skippedPreFilter: 0 },
+        };
+      }
+      throw parseErr;
     }
-    const res = parseMarkedJson(combined);
     const st = res.stats || {};
     if (res.status === "VERIFICATION_REQUIRED") {
       onLog(`⚠️ 抓取过程中遇到安全验证（TaskSpace #${res.taskSpaceId}），已停止并交出控制权！已省 ${st.skippedExisting || 0}+${st.skippedPreFilter || 0} 次点击，抓到 ${res.jobs.length} 条。`);
