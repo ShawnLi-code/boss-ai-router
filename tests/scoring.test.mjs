@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { evaluateJobRisk, shouldTriggerWebSearch } from "../src/scoring.mjs";
 import { analyzeSearchSnippets } from "../src/websearch.mjs";
-import { DEFAULT_TARGET_ROLES, factGuardCheck, matchResumeToJob } from "../src/matcher.mjs";
+import { DEFAULT_TARGET_ROLES, evaluateJobEligibility, factGuardCheck, matchResumeToJob } from "../src/matcher.mjs";
 import { normalizeCompanyRoot } from "../src/db.mjs";
 import { compareSemver } from "../src/updater.mjs";
 
@@ -281,6 +281,83 @@ test("5维度匹配打分：硬性门槛超档或偏离赛道应判定 LOW_FIT",
   assert.equal(m.apply_advice, "LOW_FIT");
   assert.ok(m.match_score < 55);
 });
+
+test("职位精筛漏斗：拦截实习/产品/开发/路测/5-10年，保留1-3年及强相关3-5年测试岗", () => {
+  const intern = evaluateJobEligibility({
+    job_title: "软件测试（实习转正）",
+    experience_req: "在校/应届",
+    jd_text: "协助编写测试用例与回归测试。",
+  });
+  assert.equal(intern.eligible, false);
+  assert.equal(intern.filter_category, "INTERN_OR_PARTTIME");
+
+  const pm = evaluateJobEligibility({
+    job_title: "AI智能机柜产品经理",
+    experience_req: "经验不限",
+    jd_text: "负责AI智能机柜项目产品开发工作",
+  });
+  assert.equal(pm.eligible, false);
+  assert.equal(pm.filter_category, "NON_QA_ROLE");
+
+  const dev = evaluateJobEligibility({
+    job_title: "Java开发工程师（大模型网关方向）",
+    experience_req: "3-5年",
+    jd_text: "负责基于 Spring Cloud 构建企业级大模型网关。",
+  });
+  assert.equal(dev.eligible, false);
+  assert.equal(dev.filter_category, "NON_QA_ROLE");
+
+  const driverTest = evaluateJobEligibility({
+    job_title: "自动驾驶测试员",
+    experience_req: "1-3年",
+    jd_text: "开车测试智能驾驶系统，发现问题及时接管车辆。",
+  });
+  assert.equal(driverTest.eligible, false);
+  assert.equal(driverTest.filter_category, "NON_QA_ROLE");
+
+  const senior5y = evaluateJobEligibility({
+    job_title: "测试工程师（SaaS ERP）",
+    experience_req: "5-10年",
+    jd_text: "负责功能测试与接口测试。",
+  });
+  assert.equal(senior5y.eligible, false);
+  assert.equal(senior5y.filter_category, "EXP_OUT_OF_RANGE");
+
+  const stretch35 = evaluateJobEligibility({
+    job_title: "软件测试工程师（AI 大模型方向）",
+    experience_req: "3-5年",
+    jd_text: "负责AI大模型功能测试、接口自动化、测试用例设计与大模型效果评测。",
+  });
+  assert.equal(stretch35.eligible, true);
+  assert.equal(stretch35.exp_tier, "STRETCH_3_5");
+
+  const ideal13 = evaluateJobEligibility({
+    job_title: "AI测试工程师",
+    experience_req: "1-3年",
+    jd_text: "负责大模型与接口自动化测试。",
+  });
+  assert.equal(ideal13.eligible, true);
+  assert.equal(ideal13.exp_tier, "IDEAL_1_3");
+});
+
+test("短JD非测试岗不得再触发默认高分假象", () => {
+  const resume2y = {
+    track_key: "A",
+    years_label: "2年经验",
+    summary: "2年软件测试与接口自动化经验。",
+    skills: ["Python", "Pytest"],
+    experiences: [{ company: "A科技", role: "软件测试", period: "2024.06-2026.03", content: "功能测试、接口测试" }],
+    projects: [],
+    education: [{ school: "示例大学", degree: "本科" }],
+  };
+  const m = matchResumeToJob(
+    { company_name: "某电子公司", job_title: "AI智能机柜产品经理", experience_req: "经验不限", jd_text: "负责AI智能机柜项目产品开发工作" },
+    resume2y
+  );
+  assert.ok(m.match_score < 35, `expected <35 for off-domain PM job, got ${m.match_score}`);
+  assert.equal(m.eligibility.eligible, false);
+});
+
 
 
 

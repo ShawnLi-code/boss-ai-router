@@ -73,8 +73,9 @@ const els = {
   cntAll: document.getElementById("cnt-all"),
   cntDirect: document.getElementById("cnt-direct"),
   cntRevise: document.getElementById("cnt-revise"),
-  cntLow: document.getElementById("cnt-low"),
-  cntRisk: document.getElementById("cnt-risk"),
+  cntIdeal: document.getElementById("cnt-ideal"),
+  cntFiltered: document.getElementById("cnt-filtered"),
+  btnPurgeFiltered: document.getElementById("btn-purge-filtered"),
   jobSearchInput: document.getElementById("job-search-input"),
   jobSortSelect: document.getElementById("job-sort-select"),
   jobListPane: document.getElementById("job-list-pane"),
@@ -210,6 +211,7 @@ document.querySelectorAll(".seg-btn[data-filter]").forEach((btn) => {
     btn.classList.add("active");
     state.activeFilter = btn.dataset.filter;
     renderJobList();
+    renderInspector(true);
   });
 });
 
@@ -275,12 +277,15 @@ function renderAll() {
 
 function renderSidebarSummary() {
   const { jobs, tracks, settings } = state.data;
-  els.navJobsCount.textContent = jobs.length;
-  els.cntAll.textContent = jobs.length;
-  els.cntDirect.textContent = jobs.filter((j) => (j.apply_advice || j.match?.apply_advice) === "DIRECT_APPLY").length;
-  els.cntRevise.textContent = jobs.filter((j) => (j.apply_advice || j.match?.apply_advice) === "REVISE_FIRST").length;
-  els.cntLow.textContent = jobs.filter((j) => (j.apply_advice || j.match?.apply_advice) === "LOW_FIT").length;
-  els.cntRisk.textContent = jobs.filter((j) => j.zone === "RED" || j.zone === "SKIP").length;
+  const eligible = jobs.filter((j) => (j.filter_status || "PASS") === "PASS");
+  const filtered = jobs.filter((j) => j.filter_status === "FILTERED");
+  els.navJobsCount.textContent = eligible.length;
+  els.cntAll.textContent = eligible.length;
+  els.cntDirect.textContent = eligible.filter((j) => (j.apply_advice || j.match?.apply_advice) === "DIRECT_APPLY").length;
+  els.cntRevise.textContent = eligible.filter((j) => (j.apply_advice || j.match?.apply_advice) === "REVISE_FIRST").length;
+  els.cntIdeal.textContent = eligible.filter((j) => (j.match?.eligibility?.exp_tier || "IDEAL_1_3") === "IDEAL_1_3").length;
+  els.cntFiltered.textContent = filtered.length;
+  els.btnPurgeFiltered.hidden = filtered.length === 0;
 
   const t1 = tracks[0];
   const t2 = tracks[1];
@@ -370,13 +375,18 @@ function zoneTagHtml(zone, score) {
 function getFilteredSortedJobs() {
   const all = state.data?.jobs || [];
   let list = all.filter((j) => {
-    const adv = j.apply_advice || j.match?.apply_advice || "REVISE_FIRST";
-    if (state.activeFilter === "DIRECT_APPLY" && adv !== "DIRECT_APPLY") return false;
-    if (state.activeFilter === "REVISE_FIRST" && adv !== "REVISE_FIRST") return false;
-    if (state.activeFilter === "LOW_FIT" && adv !== "LOW_FIT") return false;
-    if (state.activeFilter === "RISK_SKIP" && j.zone !== "RED" && j.zone !== "SKIP") return false;
+    const isFiltered = j.filter_status === "FILTERED";
+    if (state.activeFilter === "FILTERED") {
+      if (!isFiltered) return false;
+    } else {
+      if (isFiltered) return false;
+      const adv = j.apply_advice || j.match?.apply_advice || "REVISE_FIRST";
+      if (state.activeFilter === "DIRECT_APPLY" && adv !== "DIRECT_APPLY") return false;
+      if (state.activeFilter === "REVISE_FIRST" && adv !== "REVISE_FIRST") return false;
+      if (state.activeFilter === "IDEAL_1_3" && (j.match?.eligibility?.exp_tier || "IDEAL_1_3") !== "IDEAL_1_3") return false;
+    }
     if (state.searchText) {
-      const hay = `${j.job_title} ${j.company_name} ${j.matched_query || ""} ${j.jd_text || ""} ${j.industry || ""}`.toLowerCase();
+      const hay = `${j.job_title} ${j.company_name} ${j.matched_query || ""} ${j.jd_text || ""} ${j.industry || ""} ${j.filter_reason || ""}`.toLowerCase();
       if (!hay.includes(state.searchText)) return false;
     }
     return true;
@@ -395,7 +405,7 @@ function getFilteredSortedJobs() {
 function renderJobList() {
   const jobs = getFilteredSortedJobs();
   if (jobs.length === 0) {
-    els.jobListPane.innerHTML = `<div class="empty-state">当前筛选下暂无已保存岗位。</div>`;
+    els.jobListPane.innerHTML = `<div class="empty-state">当前筛选下暂无岗位。</div>`;
     return;
   }
 
@@ -403,16 +413,20 @@ function renderJobList() {
     .map((j) => {
       const selected = j.id === state.selectedJobId;
       const adv = j.apply_advice || j.match?.apply_advice || "REVISE_FIRST";
-      const srcTag = j.matched_query ? `${j.matched_query}` : (j.source_profile_id || "");
+      const expBadge = j.filter_status === "FILTERED"
+        ? (j.filter_reason || "已过滤杂岗")
+        : (j.match?.eligibility?.exp_badge || j.experience_req || "");
+      const srcTag = j.matched_query ? `${j.matched_query}` : "";
       return `
         <button type="button" class="job-row" role="option" aria-selected="${selected}" data-select-job="${j.id}">
           <div class="job-row-top">
             <span class="job-row-title">${esc(j.job_title)}</span>
             <span class="job-row-salary">${esc(j.salary_range || "面议")}</span>
           </div>
-          <div class="job-row-sub">${esc(j.company_name)} · ${esc(j.scale || "规模未知")} · ${esc(j.recruiter_active || j.recruiter_title || "未知")}</div>
+          <div class="job-row-sub">${esc(j.company_name)} · ${esc(j.experience_req || "经验不限")} · ${esc(j.scale || "规模未知")} · ${esc(j.recruiter_active || j.recruiter_title || "未知")}</div>
           <div class="job-row-meta">
-            ${adviceTagHtml(adv, j.match_score || 0)}
+            ${j.filter_status === "FILTERED" ? `<span class="meta-pill">${esc(expBadge)}</span>` : adviceTagHtml(adv, j.match_score || 0)}
+            ${j.filter_status !== "FILTERED" && expBadge ? `<span class="meta-pill">${esc(expBadge)}</span>` : ""}
             ${zoneTagHtml(j.zone, j.risk_score)}
             ${srcTag ? `<span class="meta-pill">${esc(srcTag)}</span>` : ""}
             <span class="muted" style="margin-left:auto;">${esc(STATUS_LABELS[j.status] || j.status)}</span>
@@ -437,14 +451,14 @@ async function renderInspector(fetchFresh = false) {
     return;
   }
 
-  let job = (state.data?.jobs || []).find((j) => j.id === state.selectedJobId);
+  const visibleJobs = getFilteredSortedJobs();
+  let job = visibleJobs.find((j) => j.id === state.selectedJobId);
   if (!job) {
-    const visible = getFilteredSortedJobs();
-    if (visible.length > 0) {
-      state.selectedJobId = visible[0].id;
-      job = visible[0];
+    if (visibleJobs.length > 0) {
+      state.selectedJobId = visibleJobs[0].id;
+      job = visibleJobs[0];
     } else {
-      els.jobInspectorPane.innerHTML = `<div class="empty-state">请选择左侧岗位。</div>`;
+      els.jobInspectorPane.innerHTML = `<div class="empty-state">当前筛选下暂无岗位。</div>`;
       return;
     }
   }
@@ -494,10 +508,12 @@ async function renderInspector(fetchFresh = false) {
         ${adviceTagHtml(applyAdvice, job.match_score || 0)}
         ${zoneTagHtml(job.zone, job.risk_score)}
         <button type="button" class="btn btn-secondary btn-xs" id="insp-open-page">Ego 打开</button>
+        ${job.filter_status === "FILTERED" ? `<button type="button" class="btn btn-secondary btn-xs" id="insp-restore-btn">放行回精选</button>` : `<button type="button" class="btn btn-ghost btn-xs" id="insp-filter-out-btn">标记杂岗</button>`}
         <button type="button" class="btn btn-ghost btn-xs" id="insp-ban-btn">拉黑</button>
       </div>
     </div>
 
+    ${job.filter_status === "FILTERED" ? `<div class="alert-strip alert-warn" style="border-radius:8px;"><span><strong>自动精筛已过滤：</strong>${esc(job.filter_reason || "非测试相关或经验超档")}</span></div>` : ""}
     ${job.blacklisted ? `<div class="conflict-alert">黑名单拦截：${esc(job.blacklisted.company_name)}（${esc(job.blacklisted.reason)}）</div>` : ""}
     ${conflict ? `<div class="conflict-alert">防撞车提醒：公司「${esc(job.company_name)}」近期曾用 ${esc(conflict.profile_id)} 沟通过，请确认是否继续跳转。</div>` : ""}
 
@@ -696,6 +712,16 @@ async function renderInspector(fetchFresh = false) {
     await refreshState();
   });
 
+  document.getElementById("insp-restore-btn")?.addEventListener("click", async () => {
+    await api(`/api/jobs/${job.id}/override-filter`, { method: "POST", body: JSON.stringify({ filter_status: "PASS" }) });
+    await refreshState();
+  });
+
+  document.getElementById("insp-filter-out-btn")?.addEventListener("click", async () => {
+    await api(`/api/jobs/${job.id}/override-filter`, { method: "POST", body: JSON.stringify({ filter_status: "FILTERED" }) });
+    await refreshState();
+  });
+
   document.getElementById("insp-refresh-intel").addEventListener("click", async () => {
     setWorkerBusy(true, "正在联网补查背调舆情...");
     try {
@@ -884,9 +910,9 @@ function renderFunnel() {
   const ivRate = f.delivered > 0 ? Math.round((f.interviews / f.delivered) * 100) : 0;
   els.funnelCards.innerHTML = `
     <div class="funnel-card">
-      <strong>已保存岗位池</strong>
-      <div class="muted">共保存 ${esc(f.total_jobs)} 条</div>
-      <div class="muted">黑名单/引流拦截 ${esc(f.skipped)} 条</div>
+      <strong>精筛岗位池</strong>
+      <div class="muted">精选保留 ${esc(f.eligible_jobs ?? f.total_jobs)} 条（总抓 ${esc(f.total_jobs)}）</div>
+      <div class="muted">自动过滤杂岗 ${esc(f.filtered_out ?? 0)} 条 · 黑名单拦截 ${esc(f.skipped)} 条</div>
     </div>
     <div class="funnel-card">
       <strong>匹配决策分布</strong>
@@ -984,6 +1010,9 @@ function renderSettings() {
   form.daily_check_enabled.value = settings.daily_check_enabled || "true";
   form.daily_check_time.value = settings.daily_check_time || "09:30";
   form.scan_mode.value = settings.scan_mode === "single" ? "single" : "both";
+  form.filter_exp_mode.value = settings.filter_exp_mode || "prefer_1_3_allow_3_5";
+  form.filter_exclude_intern.value = settings.filter_exclude_intern || "true";
+  form.filter_exclude_non_qa.value = settings.filter_exclude_non_qa || "true";
   form.delay_min_ms.value = settings.delay_min_ms || "4500";
   form.delay_max_ms.value = settings.delay_max_ms || "8500";
   form.auto_web_search.value = settings.auto_web_search || "true";
@@ -1162,6 +1191,13 @@ async function reEvaluateAll() {
 
 els.btnRecalcAll.addEventListener("click", reEvaluateAll);
 els.btnRecalcFromResumes.addEventListener("click", reEvaluateAll);
+
+els.btnPurgeFiltered.addEventListener("click", async () => {
+  const cnt = Number(els.cntFiltered.textContent || 0);
+  if (!confirm(`确定从本地数据库清理掉这 ${cnt} 条已过滤的实习/开发/产品/超龄杂岗吗？（已投递或人工放行的不会删除）`)) return;
+  await api("/api/jobs/purge-filtered", { method: "POST" });
+  await refreshState();
+});
 
 els.btnOpenImport.addEventListener("click", () => els.importModal.showModal());
 

@@ -134,22 +134,23 @@
         </div>
 
         <div class="subbar">
-          <div class="segmented" role="group" aria-label="按投递建议筛选">
-            <button type="button" class="seg-btn active" data-filter="ALL">全部 <span id="cnt-all">0</span></button>
+          <div class="segmented" role="group" aria-label="按精筛结果筛选">
+            <button type="button" class="seg-btn active" data-filter="ALL">精选测试池 <span id="cnt-all">0</span></button>
             <button type="button" class="seg-btn" data-filter="DIRECT_APPLY">可直接投 <span id="cnt-direct">0</span></button>
-            <button type="button" class="seg-btn" data-filter="REVISE_FIRST">改微调后投 <span id="cnt-revise">0</span></button>
-            <button type="button" class="seg-btn" data-filter="LOW_FIT">匹配偏低 <span id="cnt-low">0</span></button>
-            <button type="button" class="seg-btn" data-filter="RISK_SKIP">高危/拦截 <span id="cnt-risk">0</span></button>
+            <button type="button" class="seg-btn" data-filter="REVISE_FIRST">改微调/3-5年冲刺 <span id="cnt-revise">0</span></button>
+            <button type="button" class="seg-btn" data-filter="IDEAL_1_3">仅看 1-3年/不限 <span id="cnt-ideal">0</span></button>
+            <button type="button" class="seg-btn" data-filter="FILTERED">已过滤杂岗 <span id="cnt-filtered">0</span></button>
           </div>
           <div class="subbar-right">
-            <input type="search" id="job-search-input" placeholder="过滤已保存岗位 / 公司 / JD" aria-label="过滤已保存岗位" class="input-compact" style="width:190px;">
+            <input type="search" id="job-search-input" placeholder="过滤岗位 / 公司 / JD" aria-label="过滤已保存岗位" class="input-compact" style="width:170px;">
             <select id="job-sort-select" aria-label="排序方式" class="input-compact">
               <option value="match">按匹配分高→低</option>
               <option value="recent">按最新采集</option>
               <option value="risk">按背调风险低→高</option>
             </select>
+            <button type="button" id="btn-purge-filtered" class="btn btn-ghost btn-xs" hidden>清理杂岗</button>
             <div class="live-log-inline" aria-live="polite">
-              <span id="live-log-latest">就绪 · 统一按 2年经历评估 · 低速拟人 4.5s–8.5s</span>
+              <span id="live-log-latest">就绪 · 默认只看测试相关高权重岗（已拦截实习/开发/产品/5年以上）</span>
             </div>
           </div>
         </div>
@@ -250,6 +251,28 @@
                 <select name="scan_mode">
                   <option value="both">双号分别刷一遍（发现更多岗位+去重）</option>
                   <option value="single">仅使用单号刷岗</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>经验年限筛选规则</span>
+                <select name="filter_exp_mode">
+                  <option value="prefer_1_3_allow_3_5">优先 1-3年/不限，测试强相关可留 3-5年</option>
+                  <option value="1_3_only">严格仅留 1-3年/不限/1年以内</option>
+                  <option value="all">不过滤经验年限</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>过滤实习 / 校招 / 兼职</span>
+                <select name="filter_exclude_intern">
+                  <option value="true">开启（自动归入已过滤杂岗）</option>
+                  <option value="false">关闭</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>过滤产品 / 开发 / 硬件等非测试岗</span>
+                <select name="filter_exclude_non_qa">
+                  <option value="true">开启（仅留软件测试/AI评测/工程向提示词）</option>
+                  <option value="false">关闭</option>
                 </select>
               </label>
               <label class="field">

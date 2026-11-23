@@ -105,6 +105,8 @@ db.exec(`
     tailored_resume_json TEXT NOT NULL DEFAULT '{}',
     matched_query TEXT NOT NULL DEFAULT '',
     apply_advice TEXT NOT NULL DEFAULT 'REVISE_FIRST',
+    filter_status TEXT NOT NULL DEFAULT 'PASS',
+    filter_reason TEXT NOT NULL DEFAULT '',
     custom_greeting TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'NEW',
     notes TEXT NOT NULL DEFAULT '',
@@ -142,6 +144,8 @@ ensureColumn("jobs", "recruiter_active", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("jobs", "company_intro", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("jobs", "matched_query", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("jobs", "apply_advice", "TEXT NOT NULL DEFAULT 'REVISE_FIRST'");
+ensureColumn("jobs", "filter_status", "TEXT NOT NULL DEFAULT 'PASS'");
+ensureColumn("jobs", "filter_reason", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("delivery_logs", "normalized_company", "TEXT NOT NULL DEFAULT ''");
 
 const now = () => new Date().toISOString();
@@ -226,6 +230,9 @@ function seedDefaults() {
     llm_api_key: "",
     primary_resume_track: "A",
     scan_mode: "both",
+    filter_exclude_intern: "true",
+    filter_exclude_non_qa: "true",
+    filter_exp_mode: "prefer_1_3_allow_3_5",
     daily_check_enabled: "true",
     daily_check_time: "09:30",
     last_daily_check_date: "",
@@ -472,8 +479,15 @@ export function saveCompanyIntel(intel) {
 }
 
 export function listJobs() {
-  const rows = db.prepare("SELECT * FROM jobs ORDER BY match_score DESC, updated_at DESC, id DESC").all();
+  const rows = db
+    .prepare("SELECT * FROM jobs ORDER BY CASE WHEN filter_status = 'PASS' THEN 0 ELSE 1 END, match_score DESC, updated_at DESC, id DESC")
+    .all();
   return rows.map(hydrateJob);
+}
+
+export function purgeFilteredJobs() {
+  const info = db.prepare("DELETE FROM jobs WHERE filter_status = 'FILTERED' AND status IN ('NEW', 'SKIP', 'FILTERED')").run();
+  return Number(info.changes || 0);
 }
 
 export function getJob(id) {
@@ -499,7 +513,7 @@ export function upsertJob(job) {
         assigned_profile_id = COALESCE(assigned_profile_id, ?),
         evidence_json = ?, intel_summary = ?, match_score = ?, match_json = ?,
         tailored_resume_json = ?, matched_query = CASE WHEN ? != '' THEN ? ELSE matched_query END,
-        apply_advice = ?, custom_greeting = ?,
+        apply_advice = ?, filter_status = ?, filter_reason = ?, custom_greeting = ?,
         status = CASE WHEN status = 'NEW' AND ? = 'SKIP' THEN 'SKIP' ELSE status END,
         updated_at = ?
       WHERE id = ?
@@ -531,6 +545,8 @@ export function upsertJob(job) {
       job.matched_query ?? "",
       job.matched_query ?? "",
       job.apply_advice ?? "REVISE_FIRST",
+      job.filter_status ?? "PASS",
+      job.filter_reason ?? "",
       job.custom_greeting ?? "",
       job.zone ?? "GREEN",
       ts,
@@ -547,8 +563,8 @@ export function upsertJob(job) {
       jd_text, company_intro, job_url, source_profile_id, parsed_json, risk_score, zone,
       recommended_track, manual_track, assigned_profile_id, evidence_json,
       intel_summary, match_score, match_json, tailored_resume_json,
-      matched_query, apply_advice, custom_greeting, status, notes, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      matched_query, apply_advice, filter_status, filter_reason, custom_greeting, status, notes, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     externalId,
     job.job_title ?? "AI测试工程师",
@@ -581,6 +597,8 @@ export function upsertJob(job) {
     JSON.stringify(job.tailored_resume ?? {}),
     job.matched_query ?? "",
     job.apply_advice ?? "REVISE_FIRST",
+    job.filter_status ?? "PASS",
+    job.filter_reason ?? "",
     job.custom_greeting ?? "",
     initialStatus,
     job.notes ?? "",
@@ -599,6 +617,8 @@ export function updateJobRouting(id, patch) {
       custom_greeting = COALESCE(?, custom_greeting),
       status = COALESCE(?, status),
       notes = COALESCE(?, notes),
+      filter_status = COALESCE(?, filter_status),
+      filter_reason = COALESCE(?, filter_reason),
       tailored_resume_json = COALESCE(?, tailored_resume_json),
       updated_at = ?
     WHERE id = ?
@@ -608,6 +628,8 @@ export function updateJobRouting(id, patch) {
     patch.custom_greeting ?? null,
     patch.status ?? null,
     patch.notes ?? null,
+    patch.filter_status ?? null,
+    patch.filter_reason ?? null,
     patch.tailored_resume ? JSON.stringify(patch.tailored_resume) : null,
     ts,
     id
@@ -681,16 +703,19 @@ export function getFunnelStats() {
       interview_rate: delivered > 0 ? Math.round((interviews / delivered) * 100) : 0,
     };
   };
+  const eligibleJobs = jobs.filter((j) => (j.filter_status || "PASS") === "PASS");
   return {
     A: summarize("A"),
     B: summarize("B"),
-    direct_apply: jobs.filter((j) => j.apply_advice === "DIRECT_APPLY").length,
-    revise_first: jobs.filter((j) => j.apply_advice === "REVISE_FIRST").length,
-    low_fit: jobs.filter((j) => j.apply_advice === "LOW_FIT").length,
-    delivered: jobs.filter((j) => ["DELIVERED", "REPLIED", "INTERVIEW", "REJECTED"].includes(j.status)).length,
-    replied: jobs.filter((j) => ["REPLIED", "INTERVIEW"].includes(j.status)).length,
-    interviews: jobs.filter((j) => j.status === "INTERVIEW").length,
-    skipped: jobs.filter((j) => j.zone === "SKIP" || j.status === "SKIP").length,
+    eligible_jobs: eligibleJobs.length,
+    filtered_out: jobs.length - eligibleJobs.length,
+    direct_apply: eligibleJobs.filter((j) => j.apply_advice === "DIRECT_APPLY").length,
+    revise_first: eligibleJobs.filter((j) => j.apply_advice === "REVISE_FIRST").length,
+    low_fit: eligibleJobs.filter((j) => j.apply_advice === "LOW_FIT").length,
+    delivered: eligibleJobs.filter((j) => ["DELIVERED", "REPLIED", "INTERVIEW", "REJECTED"].includes(j.status)).length,
+    replied: eligibleJobs.filter((j) => ["REPLIED", "INTERVIEW"].includes(j.status)).length,
+    interviews: eligibleJobs.filter((j) => j.status === "INTERVIEW").length,
+    skipped: eligibleJobs.filter((j) => j.zone === "SKIP" || j.status === "SKIP").length,
     total_jobs: jobs.length,
   };
 }

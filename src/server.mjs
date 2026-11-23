@@ -23,6 +23,7 @@ import {
   listBlacklist,
   listDeliveryLogs,
   listJobs,
+  purgeFilteredJobs,
   removeBlacklistCompany,
   saveResume,
   saveSettings,
@@ -33,7 +34,7 @@ import {
   upsertJob,
 } from "./db.mjs";
 import { evaluateJobRisk, shouldTriggerWebSearch } from "./scoring.mjs";
-import { DEFAULT_TARGET_ROLES, matchResumeToJob } from "./matcher.mjs";
+import { DEFAULT_TARGET_ROLES, evaluateJobEligibility, matchResumeToJob } from "./matcher.mjs";
 import { searchCompaniesBatchIntel, searchCompanyBackgroundIntel } from "./websearch.mjs";
 import { isLlmConfigured, refineMatchWithLlm } from "./llm.mjs";
 import {
@@ -107,10 +108,13 @@ async function scoreAndStoreJob(rawJob, { runWebSearch = true, useLlm = false } 
     "Profile 1";
 
   const resume = getPrimaryResume();
-  let match = matchResumeToJob({ ...rawJob, ...risk }, resume);
-  if (useLlm && risk.zone !== "SKIP" && isLlmConfigured(settings)) {
+  let match = matchResumeToJob({ ...rawJob, ...risk }, resume, settings);
+  if (useLlm && risk.zone !== "SKIP" && match.eligibility?.eligible && isLlmConfigured(settings)) {
     match = await refineMatchWithLlm({ ...rawJob, ...risk }, resume, match);
   }
+  const manualRestored = rawJob.filter_reason === "人工放行";
+  const finalFilterStatus = manualRestored ? "PASS" : (match.eligibility?.filter_status || "PASS");
+  const finalFilterReason = manualRestored ? "人工放行" : (match.eligibility?.filter_reason || "");
 
   return upsertJob({
     ...rawJob,
@@ -122,7 +126,9 @@ async function scoreAndStoreJob(rawJob, { runWebSearch = true, useLlm = false } 
     evidence: risk.evidence,
     intel_summary: intel?.summary || (trigger.required ? "待联网补查" : "无需强制补查"),
     match_score: match.match_score,
-    apply_advice: match.apply_advice,
+    apply_advice: manualRestored && match.apply_advice === "LOW_FIT" ? "REVISE_FIRST" : match.apply_advice,
+    filter_status: finalFilterStatus,
+    filter_reason: finalFilterReason,
     matched_query: rawJob.matched_query || "",
     match: {
       matched_keywords: match.matched_keywords,
@@ -130,6 +136,7 @@ async function scoreAndStoreJob(rawJob, { runWebSearch = true, useLlm = false } 
       missing_must_haves: match.missing_must_haves,
       matched_clusters: match.matched_clusters,
       dimensions: match.dimensions,
+      eligibility: match.eligibility,
       apply_advice: match.apply_advice,
       advice_label: match.advice_label,
       advice_summary: match.advice_summary,
@@ -225,7 +232,13 @@ async function runDailyPatrol({
         const scrapedJobs = scrapeRes.jobs || [];
         if (settings.auto_web_search !== "false" && scrapedJobs.length > 0) {
           const needSearch = scrapedJobs
-            .filter((j) => j?.company_name && !checkBlacklisted(j.company_name) && shouldTriggerWebSearch(j).required)
+            .filter(
+              (j) =>
+                j?.company_name &&
+                !checkBlacklisted(j.company_name) &&
+                evaluateJobEligibility(j, settings).eligible &&
+                shouldTriggerWebSearch(j).required
+            )
             .map((j) => j.company_name);
           if (needSearch.length > 0) {
             await searchCompaniesBatchIntel(needSearch, { profileId: pid, onLog: (m) => logEvent(m) });
@@ -526,8 +539,15 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const list = Array.isArray(body) ? body : Array.isArray(body.jobs) ? body.jobs : [body];
       if (body.runWebSearch !== false) {
+        const settings = getSettings();
         const needSearch = list
-          .filter((j) => j?.company_name && !checkBlacklisted(j.company_name) && shouldTriggerWebSearch(j).required)
+          .filter(
+            (j) =>
+              j?.company_name &&
+              !checkBlacklisted(j.company_name) &&
+              evaluateJobEligibility(j, settings).eligible &&
+              shouldTriggerWebSearch(j).required
+          )
           .map((j) => j.company_name);
         if (needSearch.length > 0) {
           await searchCompaniesBatchIntel(needSearch, { onLog: (m) => logEvent(m) });
@@ -569,7 +589,13 @@ const server = http.createServer(async (req, res) => {
       const scrapedJobs = scrapeRes.jobs || [];
       if (settings.auto_web_search !== "false" && scrapedJobs.length > 0) {
         const needSearch = scrapedJobs
-          .filter((j) => j?.company_name && !checkBlacklisted(j.company_name) && shouldTriggerWebSearch(j).required)
+          .filter(
+            (j) =>
+              j?.company_name &&
+              !checkBlacklisted(j.company_name) &&
+              evaluateJobEligibility(j, settings).eligible &&
+              shouldTriggerWebSearch(j).required
+          )
           .map((j) => j.company_name);
         if (needSearch.length > 0) {
           await searchCompaniesBatchIntel(needSearch, { profileId, onLog: (m) => logEvent(m) });
@@ -618,11 +644,37 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && pathname === "/api/jobs/re-evaluate-all") {
       const jobs = listJobs();
+      let passCount = 0;
       for (const j of jobs) {
-        await scoreAndStoreJob(j, { runWebSearch: false });
+        const updated = await scoreAndStoreJob(j, { runWebSearch: false });
+        if ((updated.filter_status || "PASS") === "PASS") passCount++;
       }
-      logEvent(`已按 2年经历主简历重新评分全部 ${jobs.length} 条已保存岗位`);
-      return sendJson(res, 200, { ok: true, count: jobs.length, state: buildStatePayload() });
+      logEvent(`已按精筛规则与 2年主简历重算全部 ${jobs.length} 条岗位（保留精选 ${passCount} 条，过滤杂岗 ${jobs.length - passCount} 条）`);
+      return sendJson(res, 200, { ok: true, count: jobs.length, passCount, state: buildStatePayload() });
+    }
+
+    if (req.method === "POST" && pathname === "/api/jobs/purge-filtered") {
+      const removed = purgeFilteredJobs();
+      logEvent(`已从本地库清理 ${removed} 条已过滤杂岗`);
+      return sendJson(res, 200, { ok: true, removed, state: buildStatePayload() });
+    }
+
+    const overrideMatch = pathname.match(/^\/api\/jobs\/(\d+)\/override-filter$/);
+    if (req.method === "POST" && overrideMatch) {
+      const job = getJob(Number(overrideMatch[1]));
+      if (!job) return sendJson(res, 404, { error: "岗位不存在" });
+      const body = await readBody(req).catch(() => ({}));
+      const nextStatus = body.filter_status === "FILTERED" ? "FILTERED" : "PASS";
+      const nextReason = nextStatus === "PASS" ? "人工放行" : (body.filter_reason || "手动标记为杂岗过滤");
+      const updated = updateJobRouting(job.id, {
+        filter_status: nextStatus,
+        filter_reason: nextReason,
+      });
+      if (nextStatus === "PASS") {
+        await scoreAndStoreJob(updated, { runWebSearch: false });
+      }
+      logEvent(nextStatus === "PASS" ? `已放行「${job.job_title} · ${job.company_name}」回到精选池` : `已手动过滤「${job.job_title}」`);
+      return sendJson(res, 200, { ok: true, job: getJob(job.id), state: buildStatePayload() });
     }
 
     const intelMatch = pathname.match(/^\/api\/jobs\/(\d+)\/intel$/);
@@ -640,12 +692,13 @@ const server = http.createServer(async (req, res) => {
       const job = getJob(Number(evalMatch[1]));
       if (!job) return sendJson(res, 404, { error: "岗位不存在" });
       const body = await readBody(req).catch(() => ({}));
+      const settings = getSettings();
       const resume = getPrimaryResume(body.trackKey || null);
       const intel = getCompanyIntel(job.company_name);
       const blacklisted = checkBlacklisted(job.company_name);
       const risk = evaluateJobRisk(job, intel, { blacklisted });
-      let match = matchResumeToJob({ ...job, ...risk }, resume);
-      if (body.useLlm !== false && isLlmConfigured()) {
+      let match = matchResumeToJob({ ...job, ...risk }, resume, settings);
+      if (body.useLlm !== false && match.eligibility?.eligible && isLlmConfigured()) {
         match = await refineMatchWithLlm({ ...job, ...risk }, resume, match);
       }
       const tracks = getAccountTracks();
@@ -655,6 +708,7 @@ const server = http.createServer(async (req, res) => {
         tracks.find((t) => t.track_key === (body.trackKey || "A"))?.profile_id ||
         tracks[0]?.profile_id ||
         "Profile 1";
+      const manualRestored = job.filter_reason === "人工放行";
       const refreshed = upsertJob({
         ...job,
         manual_track: body.trackKey || job.manual_track,
@@ -664,7 +718,9 @@ const server = http.createServer(async (req, res) => {
         recommended_track: risk.recommended_track,
         evidence: risk.evidence,
         match_score: match.match_score,
-        apply_advice: match.apply_advice,
+        apply_advice: manualRestored && match.apply_advice === "LOW_FIT" ? "REVISE_FIRST" : match.apply_advice,
+        filter_status: manualRestored ? "PASS" : (match.eligibility?.filter_status || "PASS"),
+        filter_reason: manualRestored ? "人工放行" : (match.eligibility?.filter_reason || ""),
         matched_query: job.matched_query || "",
         match: {
           matched_keywords: match.matched_keywords,
@@ -672,6 +728,7 @@ const server = http.createServer(async (req, res) => {
           missing_must_haves: match.missing_must_haves,
           matched_clusters: match.matched_clusters,
           dimensions: match.dimensions,
+          eligibility: match.eligibility,
           apply_advice: match.apply_advice,
           advice_label: match.advice_label,
           advice_summary: match.advice_summary,
