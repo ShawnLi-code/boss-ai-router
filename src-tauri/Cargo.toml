@@ -1,6 +1,6 @@
 [package]
 name = "boss-ai-router"
-version = "0.6.0"
+version = "0.6.1"
 description = "Boss AI Test Risk Assessment & Dual-Account Router Desktop App"
 authors = ["ShawnLi-code"]
 edition = "2021"

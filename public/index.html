@@ -107,7 +107,7 @@
               <option value="month">本月内活跃</option>
               <option value="all">活跃度不限</option>
             </select>
-            <input type="number" id="scrape-max" min="1" max="25" value="10" aria-label="每词目标新增上限" class="input-compact input-num" title="每个关键词目标新采集条数（增量跳过老岗，安全上限25）">
+            <input type="number" id="scrape-max" min="1" max="50" value="10" aria-label="每词目标新增上限" class="input-compact input-num" title="每个关键词目标新采集条数（开启 Boss 原生筛选+增量跳过，单词深度扫支持到 50 条）">
             <select id="scrape-mode" aria-label="刷岗账号策略" class="input-compact">
               <option value="both">双号分别刷一遍（自动去重）</option>
               <option value="single:Profile 1">仅用 Profile 1 采集</option>
@@ -370,6 +370,21 @@
                 <select name="filter_exclude_remote">
                   <option value="true">开启（拦截 base 外省市/非当前搜城）</option>
                   <option value="false">关闭</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Boss 搜索页原厂前置筛选</span>
+                <select name="boss_native_filter">
+                  <option value="true">开启（全职 + 经验1-5年/不限前置，直击目标池）</option>
+                  <option value="false">关闭（全量抓完本地再筛选）</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Boss 搜索页原厂薪资段筛选</span>
+                <select name="boss_salary_filter">
+                  <option value="">不限（由本地精确过滤 7K+、高亮 9-12K）</option>
+                  <option value="405">仅扫 Boss 10-20K 档位</option>
+                  <option value="404">仅扫 Boss 5-10K 档位</option>
                 </select>
               </label>
               <label class="field">

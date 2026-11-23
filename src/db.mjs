@@ -269,6 +269,8 @@ function seedDefaults() {
     filter_exclude_intern: "true",
     filter_exclude_non_qa: "true",
     filter_exclude_remote: "true",
+    boss_native_filter: "true",
+    boss_salary_filter: "",
     filter_min_salary_k: "7",
     target_salary_min_k: "9",
     target_salary_max_k: "12",

@@ -5,6 +5,7 @@ import { analyzeSearchSnippets } from "../src/websearch.mjs";
 import { DEFAULT_TARGET_ROLES, evaluateJobEligibility, evaluateSalaryFit, factGuardCheck, matchResumeToJob, parseSalaryRangeK } from "../src/matcher.mjs";
 import { calculateBikePlusMetroMetrics } from "../src/commute.mjs";
 import { db, getScrapeTelemetry, listKnownExternalIds, listPatrolRuns, normalizeCompanyRoot, recordPatrolRun } from "../src/db.mjs";
+import { buildBossSearchUrl } from "../src/ego-worker.mjs";
 import { compareSemver } from "../src/updater.mjs";
 
 test("RED zone: 银行/金融 + 实锤第三方背调 + HRBP 应命中 A轨_真实日期版", () => {
@@ -549,6 +550,21 @@ test("参保人数/画饼特征预警 & 增量外部ID清单：提取参保人�
   const knownIds = listKnownExternalIds();
   assert.ok(Array.isArray(knownIds));
 });
+
+test("Boss原生搜索筛选URL构建：全职1901与1-5年/不限经验参数拼接", () => {
+  const url = buildBossSearchUrl({
+    query: "软件测试",
+    city: "101280100",
+    jobType: "1901",
+    experience: "101,103,104,105",
+    salary: "405",
+  });
+  assert.ok(url.includes("city=101280100"));
+  assert.ok(url.includes("jobType=1901"));
+  assert.ok(url.includes("experience=101%2C103%2C104%2C105"));
+  assert.ok(url.includes("salary=405"));
+});
+
 
 
 

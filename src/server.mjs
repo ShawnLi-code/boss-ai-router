@@ -192,6 +192,24 @@ async function autoComputeCommuteForJobs(jobs = [], onLog = () => {}) {
 
 let patrolRunning = false;
 
+function resolveBossFilterParams(settings = {}) {
+  if (settings.boss_native_filter === "false") {
+    return { bossJobType: "", bossExperience: "", bossSalary: "" };
+  }
+  const bossJobType = settings.filter_exclude_intern !== "false" ? "1901" : "";
+  const bossExperience =
+    settings.filter_exp_mode === "1_3_only"
+      ? "101,103,104"
+      : settings.filter_exp_mode === "all"
+        ? ""
+        : "101,103,104,105";
+  return {
+    bossJobType,
+    bossExperience,
+    bossSalary: String(settings.boss_salary_filter || "").trim(),
+  };
+}
+
 function parseWatchlistKeywords(settings) {
   try {
     const arr = JSON.parse(settings.watchlist_keywords || "[]");
@@ -244,6 +262,7 @@ async function runDailyPatrol({
     const excludeIntern = settings.filter_exclude_intern !== "false";
     const excludeNonQa = settings.filter_exclude_non_qa !== "false";
     const targetCityName = settings.search_city_name || "广州";
+    const bossFilters = resolveBossFilterParams(settings);
     const MAX_PROFILE_CLICKS_PER_RUN = 80;
 
     const allKnownProfiles = [...new Set(tracks.map((t) => t.profile_id).filter(Boolean))];
@@ -307,7 +326,8 @@ async function runDailyPatrol({
           excludeIntern,
           excludeNonQa,
           targetCityName,
-          maxClicksPerStep: Math.min(24, MAX_PROFILE_CLICKS_PER_RUN - profileClicks + 2),
+          ...bossFilters,
+          maxClicksPerStep: Math.min(28, MAX_PROFILE_CLICKS_PER_RUN - profileClicks + 2),
           onLog: (m) => logEvent(m),
         });
         const stepClicks = Number(scrapeRes.stats?.detailClicks || 0);
@@ -724,11 +744,13 @@ const server = http.createServer(async (req, res) => {
       }
 
       const knownIds = body.skipExisting === false ? [] : listKnownExternalIds();
+      const singleTargetMax = Math.max(1, Math.min(50, Number(body.maxJobs ?? settings.scrape_max_jobs ?? 10)));
+      const bossFilters = resolveBossFilterParams(settings);
       const scrapeRes = await scrapeBossJobs({
         profileId,
         query: body.query || settings.search_query || "AI测试",
         city: body.city || settings.search_city || "101280100",
-        maxJobs: body.maxJobs ?? settings.scrape_max_jobs ?? 10,
+        maxJobs: singleTargetMax,
         minHrActive: body.minHrActive || settings.min_hr_active || "week",
         minDelayMs: body.minDelayMs ?? settings.delay_min_ms ?? 4500,
         maxDelayMs: body.maxDelayMs ?? settings.delay_max_ms ?? 8500,
@@ -738,6 +760,8 @@ const server = http.createServer(async (req, res) => {
         excludeIntern: settings.filter_exclude_intern !== "false",
         excludeNonQa: settings.filter_exclude_non_qa !== "false",
         targetCityName: settings.search_city_name || "广州",
+        ...bossFilters,
+        maxClicksPerStep: Math.min(55, singleTargetMax + 5),
         onLog: (m) => logEvent(m),
       });
 

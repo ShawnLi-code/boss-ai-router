@@ -1254,6 +1254,8 @@ function renderSettings() {
   if (form.target_salary_min_k) form.target_salary_min_k.value = settings.target_salary_min_k ?? "9";
   if (form.target_salary_max_k) form.target_salary_max_k.value = settings.target_salary_max_k ?? "12";
   if (form.filter_exclude_remote) form.filter_exclude_remote.value = settings.filter_exclude_remote || "true";
+  if (form.boss_native_filter) form.boss_native_filter.value = settings.boss_native_filter || "true";
+  if (form.boss_salary_filter) form.boss_salary_filter.value = settings.boss_salary_filter || "";
   form.delay_min_ms.value = settings.delay_min_ms || "4500";
   form.delay_max_ms.value = settings.delay_max_ms || "8500";
   form.auto_web_search.value = settings.auto_web_search || "true";

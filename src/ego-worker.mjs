@@ -396,6 +396,22 @@ function normalizeParsedResume(trackKey, p) {
   };
 }
 
+export function buildBossSearchUrl({
+  query = "AI测试",
+  city = "101280100",
+  jobType = "",
+  experience = "",
+  salary = "",
+} = {}) {
+  const params = new URLSearchParams();
+  params.set("city", String(city || "101280100"));
+  params.set("query", String(query || "AI测试"));
+  if (jobType) params.set("jobType", String(jobType));
+  if (experience) params.set("experience", String(experience));
+  if (salary) params.set("salary", String(salary));
+  return `https://www.zhipin.com/web/geek/jobs?${params.toString()}`;
+}
+
 export async function scrapeBossJobs({
   profileId,
   query = "AI测试",
@@ -410,18 +426,32 @@ export async function scrapeBossJobs({
   excludeIntern = true,
   excludeNonQa = true,
   targetCityName = "广州",
-  maxClicksPerStep = 24,
+  bossJobType = "",
+  bossExperience = "",
+  bossSalary = "",
+  maxClicksPerStep = 32,
   onLog = () => {},
 }) {
-  const safeMax = Math.max(1, Math.min(25, Number(maxJobs) || 8));
+  const safeMax = Math.max(1, Math.min(50, Number(maxJobs) || 8));
   const safeMinDelay = Math.max(3000, Number(minDelayMs) || 4500);
   const safeMaxDelay = Math.max(safeMinDelay + 1000, Number(maxDelayMs) || 8500);
-  const safeClickBudget = Math.max(safeMax + 4, Math.min(28, Number(maxClicksPerStep) || 24));
+  const safeClickBudget = Math.max(safeMax + 5, Math.min(55, Number(maxClicksPerStep) || 32));
 
   acquireLock(`抓取 Boss 岗位「${query}」(${profileId})`);
   try {
-    onLog(`启动增量低频采集：配置 ${profileId}，关键词「${query}」，目标新增 ${safeMax} 条（跳过 ${existingIds.length} 条已知岗，点击上限 ${safeClickBudget}）`);
-    const searchUrl = `https://www.zhipin.com/web/geek/jobs?query=${encodeURIComponent(query)}&city=${encodeURIComponent(city)}`;
+    const filterTags = [
+      bossJobType === "1901" ? "全职" : "",
+      bossExperience ? `经验[${bossExperience}]` : "",
+      bossSalary ? `薪资[${bossSalary}]` : "",
+    ].filter(Boolean);
+    onLog(`启动增量低频采集：配置 ${profileId}，关键词「${query}」，目标新增 ${safeMax} 条（跳过 ${existingIds.length} 条已知岗${filterTags.length ? ` · Boss原生筛选: ${filterTags.join("/")}` : ""}）`);
+    const searchUrl = buildBossSearchUrl({
+      query,
+      city,
+      jobType: bossJobType,
+      experience: bossExperience,
+      salary: bossSalary,
+    });
     const code = `
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const randDelay = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
@@ -481,7 +511,7 @@ if (await checkVerify()) {
 }
 
 const totalTarget = ${safeMax};
-const maxScanCards = Math.min(105, totalTarget * 5 + 15);
+const maxScanCards = Math.min(165, Math.max(75, totalTarget * 4 + 30));
 let scrollStalls = 0;
 
 for (let idx = 0; idx < maxScanCards && collected.length < totalTarget && detailClicks < maxClickBudget; idx++) {
@@ -607,8 +637,12 @@ for (let idx = 0; idx < maxScanCards && collected.length < totalTarget && detail
   await page.mouse.move(780, 420, { steps: 5, label: "move to job detail" }).catch(() => {});
   await page.mouse.wheel(0, 240, { label: "read jd details" }).catch(() => {});
   await page.waitForTimeout(randDelay(${safeMinDelay}, ${safeMaxDelay}));
-  // 每连续查看 8 个新详情额外冷却停顿，降低连击频次特征
-  if (detailClicks > 0 && detailClicks % 8 === 0) {
+  // 分段休眠防风控：每 12 次实点休息 14-22 秒，每 6 次小憩 4.5-7.5 秒
+  if (detailClicks > 0 && detailClicks % 12 === 0) {
+    const segMs = randDelay(14000, 22000);
+    console.error(\`[COOLDOWN] 已连续点看 \${detailClicks} 个新详情，分段休眠 \${Math.round(segMs / 1000)}s 防风控...\`);
+    await page.waitForTimeout(segMs);
+  } else if (detailClicks > 0 && detailClicks % 6 === 0) {
     await page.waitForTimeout(randDelay(4500, 7500));
   }
 
@@ -702,7 +736,7 @@ console.log("RESULT_JSON:" + JSON.stringify({
   stats: { scannedCards: scannedIdx, detailClicks, skippedExisting, skippedPreFilter },
 }));
 `;
-    const { combined, stderr } = await runEgoScript("scrape-jobs", code, Math.max(300_000, safeClickBudget * 14_000));
+    const { combined, stderr } = await runEgoScript("scrape-jobs", code, Math.max(360_000, safeClickBudget * 18_000));
     if (stderr) {
       for (const line of stderr.split(/\r?\n/).filter((l) => l && !l.startsWith("RESULT_JSON:"))) onLog(line);
     }
