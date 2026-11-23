@@ -898,6 +898,46 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .logs-list { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; }
 .log-item { padding: 10px 12px; border-radius: 8px; background: var(--bg-canvas); border: 1px solid var(--border-line); font-size: 12.5px; }
 
+.patrol-link {
+  cursor: pointer;
+  color: var(--accent-teal);
+  font-weight: 500;
+}
+.patrol-link:hover { text-decoration: underline; }
+.sub-section-title {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border-line);
+  border-radius: 8px;
+  background: var(--bg-canvas);
+}
+.compact-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.compact-table th, .compact-table td {
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-line);
+}
+.compact-table th {
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  white-space: nowrap;
+}
+.compact-table tr:last-child td { border-bottom: 0; }
+.compact-table .num-kept { color: var(--green-fg); font-weight: 700; }
+.compact-table .num-filt { color: var(--text-muted); }
+.view-header .btn { flex: none; white-space: nowrap; }
+
 .empty-state {
   padding: 48px 24px;
   text-align: center;

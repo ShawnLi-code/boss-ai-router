@@ -34,6 +34,7 @@ const els = {
   sideBLabel: document.getElementById("side-b-label"),
   sideBQuota: document.getElementById("side-b-quota"),
   sidePatrolStatus: document.getElementById("side-patrol-status"),
+  sideScrapeRetention: document.getElementById("side-scrape-retention"),
   btnCheckUpdate: document.getElementById("btn-check-update"),
   updateBanner: document.getElementById("update-banner"),
   updateBannerTitle: document.getElementById("update-banner-title"),
@@ -88,6 +89,10 @@ const els = {
   resumesContainer: document.getElementById("resumes-container"),
   btnRecalcFromResumes: document.getElementById("btn-recalc-from-resumes"),
   funnelCards: document.getElementById("funnel-cards"),
+  patrolKpiStrip: document.getElementById("patrol-kpi-strip"),
+  patrolRunsTableBody: document.querySelector("#patrol-runs-table tbody"),
+  dailyBreakdownTableBody: document.querySelector("#daily-breakdown-table tbody"),
+  keywordStatsTableBody: document.querySelector("#keyword-stats-table tbody"),
   tracksConfigList: document.getElementById("tracks-config-list"),
   settingsForm: document.getElementById("settings-form"),
   blacklistForm: document.getElementById("blacklist-form"),
@@ -205,6 +210,8 @@ els.themeToggleBtn.addEventListener("click", () => {
   root.setAttribute("data-theme", next);
 });
 
+els.sideScrapeRetention?.addEventListener("click", () => switchView("funnel"));
+
 els.btnToggleWatchlist.addEventListener("click", () => {
   els.watchlistDrawer.hidden = !els.watchlistDrawer.hidden;
 });
@@ -312,13 +319,22 @@ function renderSidebarSummary() {
     els.sideBQuota.textContent = `${t2.today_delivered}/${t2.daily_limit}${t2.breaker_active ? " 熔断" : ""}`;
   }
 
-  const today = new Date().toISOString().slice(0, 10);
-  if (settings?.last_daily_check_date === today) {
+  const st = state.data?.scrape_telemetry;
+  const today = new Date().toLocaleDateString("sv-SE");
+  if (st && st.today_ran) {
+    const quotaText = st.today_quota_filled
+      ? `今日已抓满 (${st.today_patrol_scanned}/${st.planned_quota})`
+      : `今日已抓 ${st.today_patrol_scanned}/${st.planned_quota} (未满)`;
+    els.sidePatrolStatus.textContent = `今日巡检：${quotaText}`;
+  } else if (settings?.last_daily_check_date === today) {
     els.sidePatrolStatus.textContent = "今日巡检：已完成";
   } else {
     els.sidePatrolStatus.textContent = settings?.daily_check_enabled === "true"
       ? `今日巡检：待运行 (${settings.daily_check_time || "09:30"})`
       : "今日巡检：手动模式";
+  }
+  if (els.sideScrapeRetention && st) {
+    els.sideScrapeRetention.textContent = `今日新 ${st.today_new_count} 留 ${st.today_new_kept} · 累计 ${st.total_jobs} 留 ${st.total_kept} →`;
   }
 }
 
@@ -1019,6 +1035,103 @@ function renderFunnel() {
       <div class="muted">约面 ${esc(f.interviews ?? 0)} (${ivRate}%)</div>
     </div>
   `;
+
+  renderScrapeTelemetry();
+}
+
+function renderScrapeTelemetry() {
+  const st = state.data?.scrape_telemetry;
+  const runs = state.data?.patrol_runs || [];
+  if (!st || !els.patrolKpiStrip) return;
+
+  const quotaBadge = st.today_quota_filled
+    ? `<span class="zone-tag zone-GREEN" style="margin-left:4px;">今日已抓满</span>`
+    : st.today_ran
+      ? `<span class="zone-tag zone-YELLOW" style="margin-left:4px;">今日未满/中断</span>`
+      : `<span class="meta-pill" style="margin-left:4px;">今日待巡检</span>`;
+
+  els.patrolKpiStrip.innerHTML = `
+    <div class="funnel-card">
+      <strong>今日巡检配额 ${quotaBadge}</strong>
+      <div style="font-size:15px;font-weight:700;">${esc(st.today_patrol_scanned)} / ${esc(st.planned_quota)} 条次</div>
+      <div class="muted">${esc(st.keyword_count)} 词 × ${esc(st.profiles_count)} 账号 × ${esc(st.max_per_keyword)} 条/词</div>
+    </div>
+    <div class="funnel-card">
+      <strong>今日首次新抓与留存</strong>
+      <div style="font-size:15px;font-weight:700;">新抓 ${esc(st.today_new_count)} → 留下 ${esc(st.today_new_kept)} 条</div>
+      <div class="muted">今日规则过滤 ${esc(st.today_new_filtered)} 条（含 &lt;7K / 异地 / 非测岗）</div>
+    </div>
+    <div class="funnel-card">
+      <strong>历史累计去重入库</strong>
+      <div style="font-size:15px;font-weight:700;">总计 ${esc(st.total_jobs)} → 留下 ${esc(st.total_kept)} 条</div>
+      <div class="muted">累计过滤 ${esc(st.total_filtered)} 条 · 留存率 ${st.total_jobs > 0 ? Math.round((st.total_kept / st.total_jobs) * 100) : 0}%</div>
+    </div>
+    <div class="funnel-card">
+      <strong>9-12K 高权重精选池</strong>
+      <div style="font-size:15px;font-weight:700;">${esc(st.salary_ideal_count)} 条理想薪资</div>
+      <div class="muted">可在岗位工作台一点筛选直投</div>
+    </div>
+  `;
+
+  if (els.patrolRunsTableBody) {
+    els.patrolRunsTableBody.innerHTML = runs.length
+      ? runs
+          .map((r) => {
+            const quotaTxt = r.planned_quota ? `${r.scanned_count}/${r.planned_quota}` : `${r.scanned_count}`;
+            const statusText = r.status === "OK"
+              ? (r.planned_quota && r.scanned_count >= r.planned_quota ? "已满完成" : "已完成")
+              : "验证中断";
+            const modeText = r.mode === "SINGLE" ? "单词采集" : "每日巡检";
+            const timeShort = r.finished_at ? fmtTime(r.finished_at).slice(5, 16) : r.run_date;
+            return `
+              <tr>
+                <td><strong>${esc(timeShort)}</strong> <span class="muted">${esc(modeText)}</span><div class="muted">${esc((r.profiles || []).join("+"))}</div></td>
+                <td>${esc(quotaTxt)}</td>
+                <td>${esc(r.new_count)}</td>
+                <td class="num-kept">${esc(r.kept_count)} <span class="num-filt">(/ 滤${esc(r.filtered_count)})</span></td>
+                <td><span class="meta-pill">${esc(statusText)}</span></td>
+              </tr>
+            `;
+          })
+          .join("")
+      : `<tr><td colspan="5" class="muted">暂无巡检批次记录。</td></tr>`;
+  }
+
+  if (els.dailyBreakdownTableBody) {
+    const days = st.by_day || [];
+    els.dailyBreakdownTableBody.innerHTML = days.length
+      ? days
+          .map((d) => `
+            <tr>
+              <td><strong>${esc(d.run_date)}</strong></td>
+              <td>${esc(d.new_count)} 条</td>
+              <td class="num-kept">${esc(d.kept_count)} 条</td>
+              <td class="num-filt">${esc(d.filtered_count)} 条</td>
+            </tr>
+          `)
+          .join("")
+      : `<tr><td colspan="4" class="muted">暂无每日记录。</td></tr>`;
+  }
+
+  if (els.keywordStatsTableBody) {
+    const kws = st.by_keyword || [];
+    els.keywordStatsTableBody.innerHTML = kws.length
+      ? kws
+          .map((k) => {
+            const pct = k.total > 0 ? Math.round((k.kept / k.total) * 100) : 0;
+            return `
+              <tr>
+                <td><strong>${esc(k.keyword)}</strong></td>
+                <td>${esc(k.total)} 条</td>
+                <td class="num-kept">${esc(k.kept)} 条</td>
+                <td class="num-filt">${esc(k.filtered)} 条</td>
+                <td>${pct}%</td>
+              </tr>
+            `;
+          })
+          .join("")
+      : `<tr><td colspan="5" class="muted">暂无关键词明细。</td></tr>`;
+  }
 }
 
 function renderBlacklist() {

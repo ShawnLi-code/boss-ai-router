@@ -4,7 +4,7 @@ import { evaluateJobRisk, shouldTriggerWebSearch } from "../src/scoring.mjs";
 import { analyzeSearchSnippets } from "../src/websearch.mjs";
 import { DEFAULT_TARGET_ROLES, evaluateJobEligibility, evaluateSalaryFit, factGuardCheck, matchResumeToJob, parseSalaryRangeK } from "../src/matcher.mjs";
 import { calculateBikePlusMetroMetrics } from "../src/commute.mjs";
-import { normalizeCompanyRoot } from "../src/db.mjs";
+import { db, getScrapeTelemetry, listPatrolRuns, normalizeCompanyRoot, recordPatrolRun } from "../src/db.mjs";
 import { compareSemver } from "../src/updater.mjs";
 
 test("RED zone: 银行/金融 + 实锤第三方背调 + HRBP 应命中 A轨_真实日期版", () => {
@@ -489,6 +489,34 @@ test("异地跨城与小语种翻译过滤：拦截 base杭州/base北京/芜湖
   assert.equal(lang.filter_status, "FILTERED");
   assert.equal(lang.filter_category, "NON_QA_ROLE");
 });
+
+test("抓取记录与留存统计：patrol_runs 写入读取及额度核算", () => {
+  const rec = recordPatrolRun({
+    run_date: "2099-01-01",
+    mode: "SINGLE",
+    profiles: ["Profile 1"],
+    keywords: ["AI测试"],
+    planned_quota: 5,
+    scanned_count: 5,
+    new_count: 2,
+    kept_count: 1,
+    filtered_count: 4,
+    status: "OK",
+    summary: "test run",
+  });
+  try {
+    assert.ok(rec.id > 0);
+    const runs = listPatrolRuns(10);
+    assert.ok(runs.some((r) => r.run_date === "2099-01-01" && r.kept_count === 1));
+    const tel = getScrapeTelemetry();
+    assert.equal(typeof tel.total_jobs, "number");
+    assert.equal(typeof tel.total_kept, "number");
+    assert.ok(Array.isArray(tel.by_keyword));
+  } finally {
+    db.prepare("DELETE FROM patrol_runs WHERE id = ?").run(rec.id);
+  }
+});
+
 
 
 

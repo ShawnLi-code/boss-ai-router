@@ -1,6 +1,6 @@
 {
   "name": "boss-ai-router",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "private": false,
   "type": "module",
   "description": "Boss直聘 AI测试岗位风控评估、动态简历匹配与 Ego 双号分流桌面应用 (Tauri 2)",

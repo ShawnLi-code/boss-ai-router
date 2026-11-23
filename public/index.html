@@ -29,7 +29,7 @@
           <span>2年简历母版</span>
         </button>
         <button type="button" class="nav-item" data-view="funnel">
-          <span>黑名单与统计</span>
+          <span>抓取记录与统计</span>
         </button>
         <button type="button" class="nav-item" data-view="settings">
           <span>巡检计划与设置</span>
@@ -47,6 +47,7 @@
           <span class="quota-val" id="side-b-quota">0/25</span>
         </div>
         <div class="patrol-mini" id="side-patrol-status">今日巡检：待执行</div>
+        <div class="patrol-mini patrol-link" id="side-scrape-retention" title="点击查看每日抓取与留存记录详情">加载中...</div>
       </div>
 
       <div class="sidebar-footer">
@@ -188,15 +189,71 @@
         <div id="resumes-container" class="stack-sm"></div>
       </section>
 
-      <!-- VIEW 3: Funnel & Blacklist -->
+      <!-- VIEW 3: Scrape Records, Funnel & Blacklist -->
       <section id="view-funnel" class="view-pane scroll-pane" hidden>
         <div class="view-header">
           <div>
-            <h2>岗位统计、黑名单与沟通审计</h2>
-            <p class="muted">查看每日巡检累积岗位的匹配分布、投递推进情况，以及避坑黑名单拦截记录。</p>
+            <h2>每日抓取记录、留存统计与黑名单</h2>
+            <p class="muted">一目了然查看每天抓了多少条、今日是否抓满、过滤规则淘汰与精选留下了多少条，以及各关键词产出。</p>
           </div>
           <a class="btn btn-secondary btn-sm" href="/api/export" download>导出全量 JSON</a>
         </div>
+
+        <section class="surface-box" style="margin-bottom:14px;">
+          <h3>每日抓取额度与留存总览</h3>
+          <div id="patrol-kpi-strip" class="funnel-grid" style="margin-bottom:14px;"></div>
+          <div class="two-col-grid">
+            <div>
+              <h4 class="sub-section-title">巡检与采抓批次记录</h4>
+              <div class="table-scroll">
+                <table class="compact-table" id="patrol-runs-table">
+                  <thead>
+                    <tr>
+                      <th>日期 / 模式</th>
+                      <th>扫描/目标</th>
+                      <th>新入库</th>
+                      <th>精选留下</th>
+                      <th>状态</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <h4 class="sub-section-title" style="margin-top:14px;">按首抓日期汇总（新抓 vs 留存）</h4>
+              <div class="table-scroll">
+                <table class="compact-table" id="daily-breakdown-table">
+                  <thead>
+                    <tr>
+                      <th>日期</th>
+                      <th>首次新抓</th>
+                      <th>规则留下</th>
+                      <th>已过滤</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+            <div>
+              <h4 class="sub-section-title">各关键词抓取与留存明细</h4>
+              <div class="table-scroll">
+                <table class="compact-table" id="keyword-stats-table">
+                  <thead>
+                    <tr>
+                      <th>关键词</th>
+                      <th>累计抓到</th>
+                      <th>精选留下</th>
+                      <th>已过滤</th>
+                      <th>留存率</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <div class="two-col-grid">
           <section class="surface-box">
             <h3>岗位匹配与投递漏斗</h3>

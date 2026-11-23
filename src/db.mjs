@@ -136,6 +136,24 @@ db.exec(`
     detail TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS patrol_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_date TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'PATROL',
+    profiles_json TEXT NOT NULL DEFAULT '[]',
+    keywords_json TEXT NOT NULL DEFAULT '[]',
+    planned_quota INTEGER NOT NULL DEFAULT 0,
+    scanned_count INTEGER NOT NULL DEFAULT 0,
+    new_count INTEGER NOT NULL DEFAULT 0,
+    kept_count INTEGER NOT NULL DEFAULT 0,
+    filtered_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'OK',
+    summary TEXT NOT NULL DEFAULT '',
+    details_json TEXT NOT NULL DEFAULT '[]',
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL
+  );
 `);
 
 // Schema migration for existing local router.db databases
@@ -745,6 +763,160 @@ export function addDeliveryLog(entry) {
     ts
   );
   return db.prepare("SELECT * FROM delivery_logs WHERE id = ?").get(info.lastInsertRowid);
+}
+
+export function hasJobExternalId(externalId) {
+  if (!externalId) return false;
+  return Boolean(db.prepare("SELECT 1 FROM jobs WHERE external_id = ?").get(externalId));
+}
+
+export function recordPatrolRun(entry) {
+  const ts = now();
+  const info = db.prepare(`
+    INSERT INTO patrol_runs (
+      run_date, mode, profiles_json, keywords_json,
+      planned_quota, scanned_count, new_count, kept_count, filtered_count,
+      status, summary, details_json, started_at, finished_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    entry.run_date || todayStr(),
+    entry.mode || "PATROL",
+    JSON.stringify(entry.profiles ?? []),
+    JSON.stringify(entry.keywords ?? []),
+    Number(entry.planned_quota ?? 0),
+    Number(entry.scanned_count ?? 0),
+    Number(entry.new_count ?? 0),
+    Number(entry.kept_count ?? 0),
+    Number(entry.filtered_count ?? 0),
+    entry.status || "OK",
+    entry.summary || "",
+    JSON.stringify(entry.details ?? []),
+    entry.started_at || ts,
+    entry.finished_at || ts
+  );
+  return db.prepare("SELECT * FROM patrol_runs WHERE id = ?").get(info.lastInsertRowid);
+}
+
+function seedInitialPatrolRunIfEmpty() {
+  const cnt = db.prepare("SELECT COUNT(*) as c FROM patrol_runs").get()?.c || 0;
+  if (cnt > 0) return;
+  const settings = getSettings();
+  const lastDate = settings.last_daily_check_date || "";
+  const summary = settings.last_daily_check_summary || "";
+  if (!lastDate || !summary) return;
+  const scannedMatch = summary.match(/保存\/更新\s*(\d+)\s*条/);
+  const scannedCount = scannedMatch ? Number(scannedMatch[1]) : 0;
+  const kws = safeJson(settings.watchlist_keywords, []);
+  const maxPerKw = Number(settings.scrape_max_jobs || 10);
+  const profiles = settings.scan_mode === "both" ? ["Profile 2", "Profile 1"] : ["Profile 1"];
+  const planned = kws.length * maxPerKw * profiles.length;
+  const dayStats = db.prepare(`
+    SELECT COUNT(*) as new_cnt,
+      SUM(CASE WHEN filter_status = 'PASS' THEN 1 ELSE 0 END) as kept_cnt,
+      SUM(CASE WHEN filter_status = 'FILTERED' THEN 1 ELSE 0 END) as filt_cnt
+    FROM jobs WHERE date(created_at, 'localtime') = ?
+  `).get(lastDate) || { new_cnt: 0, kept_cnt: 0, filt_cnt: 0 };
+  const kwDetails = db.prepare(`
+    SELECT matched_query as keyword,
+      COUNT(*) as total,
+      SUM(CASE WHEN filter_status = 'PASS' THEN 1 ELSE 0 END) as kept
+    FROM jobs WHERE date(created_at, 'localtime') = ?
+    GROUP BY matched_query ORDER BY total DESC
+  `).all(lastDate);
+  const timeMatch = summary.match(/(\d{2}:\d{2}:\d{2})/);
+  const hhmmss = timeMatch ? timeMatch[1] : "10:28:22";
+  recordPatrolRun({
+    run_date: lastDate,
+    mode: "PATROL",
+    profiles,
+    keywords: kws,
+    planned_quota: planned || scannedCount,
+    scanned_count: scannedCount,
+    new_count: Number(dayStats.new_cnt || 0),
+    kept_count: Number(dayStats.kept_cnt || 0),
+    filtered_count: Number(dayStats.filt_cnt || 0),
+    status: summary.includes("中断") ? "VERIFICATION_REQUIRED" : "OK",
+    summary,
+    details: kwDetails,
+    started_at: `${lastDate}T09:30:00+08:00`,
+    finished_at: `${lastDate}T${hhmmss}+08:00`,
+  });
+}
+
+export function listPatrolRuns(limit = 30) {
+  seedInitialPatrolRunIfEmpty();
+  return db
+    .prepare("SELECT * FROM patrol_runs ORDER BY id DESC LIMIT ?")
+    .all(limit)
+    .map((r) => ({
+      ...r,
+      profiles: safeJson(r.profiles_json, []),
+      keywords: safeJson(r.keywords_json, []),
+      details: safeJson(r.details_json, []),
+    }));
+}
+
+export function getScrapeTelemetry() {
+  seedInitialPatrolRunIfEmpty();
+  const settings = getSettings();
+  const tracks = getAccountTracks();
+  const kws = safeJson(settings.watchlist_keywords, []);
+  const maxPerKw = Math.max(1, Math.min(12, Number(settings.scrape_max_jobs || 5)));
+  const profilesCount = settings.scan_mode === "both" ? Math.max(1, tracks.length || 2) : 1;
+  const plannedQuota = kws.length * maxPerKw * profilesCount;
+  const todayLocal = new Date().toLocaleDateString("sv-SE");
+
+  const todayRuns = listPatrolRuns(50).filter((r) => r.run_date === todayLocal);
+  const todayScanned = todayRuns.reduce((sum, r) => sum + (Number(r.scanned_count) || 0), 0);
+  const todayPatrolRuns = todayRuns.filter((r) => r.mode === "PATROL");
+  const todayPatrolScanned = todayPatrolRuns.reduce((sum, r) => sum + (Number(r.scanned_count) || 0), 0);
+
+  const byDay = db.prepare(`
+    SELECT date(created_at, 'localtime') as run_date,
+      COUNT(*) as new_count,
+      SUM(CASE WHEN filter_status = 'PASS' THEN 1 ELSE 0 END) as kept_count,
+      SUM(CASE WHEN filter_status = 'FILTERED' THEN 1 ELSE 0 END) as filtered_count
+    FROM jobs
+    GROUP BY date(created_at, 'localtime')
+    ORDER BY run_date DESC
+  `).all();
+
+  const todayRow = byDay.find((d) => d.run_date === todayLocal) || { new_count: 0, kept_count: 0, filtered_count: 0 };
+  const byKeyword = db.prepare(`
+    SELECT COALESCE(NULLIF(matched_query, ''), '未知来源') as keyword,
+      COUNT(*) as total,
+      SUM(CASE WHEN filter_status = 'PASS' THEN 1 ELSE 0 END) as kept,
+      SUM(CASE WHEN filter_status = 'FILTERED' THEN 1 ELSE 0 END) as filtered
+    FROM jobs
+    GROUP BY keyword
+    ORDER BY kept DESC, total DESC
+  `).all();
+
+  const jobs = listJobs();
+  const eligible = jobs.filter((j) => (j.filter_status || "PASS") === "PASS");
+  const todayRan = settings.last_daily_check_date === todayLocal || todayPatrolRuns.length > 0;
+  const quotaFilled = Boolean(todayRan && plannedQuota > 0 && todayPatrolScanned >= plannedQuota);
+
+  return {
+    today_date: todayLocal,
+    planned_quota: plannedQuota,
+    max_per_keyword: maxPerKw,
+    keyword_count: kws.length,
+    profiles_count: profilesCount,
+    today_ran: todayRan,
+    today_scanned: todayScanned,
+    today_patrol_scanned: todayPatrolScanned,
+    today_quota_filled: quotaFilled,
+    today_new_count: Number(todayRow.new_count || 0),
+    today_new_kept: Number(todayRow.kept_count || 0),
+    today_new_filtered: Number(todayRow.filtered_count || 0),
+    total_jobs: jobs.length,
+    total_kept: eligible.length,
+    total_filtered: jobs.length - eligible.length,
+    salary_ideal_count: eligible.filter((j) => j.match?.salary_fit?.highlighted).length,
+    by_day: byDay,
+    by_keyword: byKeyword,
+  };
 }
 
 export function getFunnelStats() {

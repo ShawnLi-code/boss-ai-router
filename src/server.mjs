@@ -18,12 +18,16 @@ import {
   getPrimaryResume,
   getResumeByTrack,
   getResumes,
+  getScrapeTelemetry,
   getSettings,
+  hasJobExternalId,
   isProfileBreakerActive,
   listBlacklist,
   listDeliveryLogs,
   listJobs,
+  listPatrolRuns,
   purgeFilteredJobs,
+  recordPatrolRun,
   removeBlacklistCompany,
   saveResume,
   saveSettings,
@@ -195,6 +199,23 @@ function parseWatchlistKeywords(settings) {
   return [...DEFAULT_TARGET_ROLES];
 }
 
+async function storeScrapedBatch(scrapedJobs = [], { profileId, query }) {
+  const saved = [];
+  let newCount = 0;
+  let keptCount = 0;
+  let filteredCount = 0;
+  for (const raw of scrapedJobs) {
+    const extId = raw.external_id || `${raw.company_name}::${raw.job_title}::${raw.salary_range || ""}`;
+    const existed = hasJobExternalId(extId);
+    const stored = await scoreAndStoreJob({ ...raw, source_profile_id: profileId, matched_query: query }, { runWebSearch: false });
+    saved.push(stored);
+    if (!existed) newCount++;
+    if ((stored.filter_status || "PASS") === "PASS") keptCount++;
+    else filteredCount++;
+  }
+  return { saved, newCount, keptCount, filteredCount };
+}
+
 async function runDailyPatrol({
   keywords = null,
   city = null,
@@ -207,6 +228,7 @@ async function runDailyPatrol({
     throw new Error("每日巡检任务已在执行中，请等待当前队列完成");
   }
   patrolRunning = true;
+  const startedAt = new Date().toISOString();
   try {
     const settings = getSettings();
     const tracks = getAccountTracks();
@@ -237,9 +259,14 @@ async function runDailyPatrol({
     }
 
     const totalSteps = targetProfiles.length * targetKeywords.length;
+    const plannedQuota = totalSteps * targetMax;
     let stepIndex = 0;
     let totalSaved = 0;
+    let totalNew = 0;
+    let totalKept = 0;
+    let totalFiltered = 0;
     const touchedProfiles = [];
+    const stepDetails = [];
 
     for (const pid of targetProfiles) {
       touchedProfiles.push(pid);
@@ -281,17 +308,42 @@ async function runDailyPatrol({
           }
         }
 
-        for (const raw of scrapedJobs) {
-          await scoreAndStoreJob({ ...raw, source_profile_id: pid, matched_query: kw }, { runWebSearch: false });
-          totalSaved++;
-        }
+        const batch = await storeScrapedBatch(scrapedJobs, { profileId: pid, query: kw });
+        totalSaved += batch.saved.length;
+        totalNew += batch.newCount;
+        totalKept += batch.keptCount;
+        totalFiltered += batch.filteredCount;
+        stepDetails.push({
+          profile_id: pid,
+          keyword: kw,
+          scanned: batch.saved.length,
+          new_count: batch.newCount,
+          kept: batch.keptCount,
+        });
 
         if (scrapeRes.status === "VERIFICATION_REQUIRED") {
           tripProfileBreaker(pid, `巡检「${kw}」时触发安全验证`);
           broadcast("verification", scrapeRes);
+          const verifySummary = `${new Date().toLocaleString("zh-CN", { hour12: false })} · ${pid} 在「${kw}」触发验证中断，已累计扫描 ${totalSaved} 条（新入库 ${totalNew} 条）`;
           saveSettings({
             last_daily_check_date: todayStr(),
-            last_daily_check_summary: `${new Date().toLocaleString("zh-CN", { hour12: false })} · ${pid} 在「${kw}」触发验证中断，已累计保存/更新 ${totalSaved} 条`,
+            last_daily_check_summary: verifySummary,
+          });
+          recordPatrolRun({
+            run_date: new Date().toLocaleDateString("sv-SE"),
+            mode: "PATROL",
+            profiles: touchedProfiles,
+            keywords: targetKeywords,
+            planned_quota: plannedQuota,
+            scanned_count: totalSaved,
+            new_count: totalNew,
+            kept_count: totalKept,
+            filtered_count: totalFiltered,
+            status: "VERIFICATION_REQUIRED",
+            summary: verifySummary,
+            details: stepDetails,
+            started_at: startedAt,
+            finished_at: new Date().toISOString(),
           });
           return {
             status: "VERIFICATION_REQUIRED",
@@ -315,8 +367,24 @@ async function runDailyPatrol({
       last_daily_check_date: todayStr(),
       last_daily_check_summary: summary,
     });
+    recordPatrolRun({
+      run_date: new Date().toLocaleDateString("sv-SE"),
+      mode: "PATROL",
+      profiles: touchedProfiles,
+      keywords: targetKeywords,
+      planned_quota: plannedQuota,
+      scanned_count: totalSaved,
+      new_count: totalNew,
+      kept_count: totalKept,
+      filtered_count: totalFiltered,
+      status: "OK",
+      summary,
+      details: stepDetails,
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+    });
     logEvent(`✅ ${summary}`);
-    return { status: "OK", savedCount: totalSaved, summary };
+    return { status: "OK", savedCount: totalSaved, newCount: totalNew, keptCount: totalKept, summary };
   } finally {
     patrolRunning = false;
     broadcast("patrol-progress", { done: true });
@@ -348,6 +416,8 @@ function buildStatePayload() {
     jobs,
     blacklist: listBlacklist(),
     funnel: getFunnelStats(),
+    patrol_runs: listPatrolRuns(25),
+    scrape_telemetry: getScrapeTelemetry(),
     logs: listDeliveryLogs(80),
     recentEvents: recentLogs,
     activeLock: getActiveLock(),
@@ -654,16 +724,28 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      const savedJobs = [];
-      for (const raw of scrapedJobs) {
-        savedJobs.push(
-          await scoreAndStoreJob(
-            { ...raw, source_profile_id: profileId, matched_query: body.query || settings.search_query || "AI测试" },
-            { runWebSearch: false }
-          )
-        );
-      }
+      const singleKw = body.query || settings.search_query || "AI测试";
+      const singleMax = Number(body.maxJobs ?? settings.scrape_max_jobs ?? 8);
+      const startedSingle = new Date().toISOString();
+      const batch = await storeScrapedBatch(scrapedJobs, { profileId, query: singleKw });
+      const savedJobs = batch.saved;
       await autoComputeCommuteForJobs(savedJobs, (m, lvl) => logEvent(m, lvl));
+      recordPatrolRun({
+        run_date: new Date().toLocaleDateString("sv-SE"),
+        mode: "SINGLE",
+        profiles: [profileId],
+        keywords: [singleKw],
+        planned_quota: singleMax,
+        scanned_count: batch.saved.length,
+        new_count: batch.newCount,
+        kept_count: batch.keptCount,
+        filtered_count: batch.filteredCount,
+        status: scrapeRes.status === "VERIFICATION_REQUIRED" ? "VERIFICATION_REQUIRED" : "OK",
+        summary: `${new Date().toLocaleString("zh-CN", { hour12: false })} · 单词采集「${singleKw}」(${profileId}) 扫描 ${batch.saved.length} 条 · 新增 ${batch.newCount} · 留下 ${batch.keptCount}`,
+        details: [{ profile_id: profileId, keyword: singleKw, scanned: batch.saved.length, new_count: batch.newCount, kept: batch.keptCount }],
+        started_at: startedSingle,
+        finished_at: new Date().toISOString(),
+      });
 
       if (scrapeRes.status === "VERIFICATION_REQUIRED") {
         tripProfileBreaker(profileId, "采集岗位过程中触发安全验证");
