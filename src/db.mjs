@@ -535,6 +535,13 @@ export function listJobs() {
   return rows.map(hydrateJob);
 }
 
+export function listKnownExternalIds() {
+  return db
+    .prepare("SELECT external_id FROM jobs WHERE external_id IS NOT NULL AND external_id != ''")
+    .all()
+    .map((r) => r.external_id);
+}
+
 export function purgeFilteredJobs() {
   const info = db.prepare("DELETE FROM jobs WHERE filter_status = 'FILTERED' AND status IN ('NEW', 'SKIP', 'FILTERED')").run();
   return Number(info.changes || 0);

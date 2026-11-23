@@ -102,11 +102,12 @@
             </select>
             <select id="scrape-hr-active" aria-label="最低HR活跃度" class="input-compact">
               <option value="week">本周内活跃</option>
+              <option value="3days">3日内活跃（高响应）</option>
               <option value="today">仅今日活跃</option>
               <option value="month">本月内活跃</option>
               <option value="all">活跃度不限</option>
             </select>
-            <input type="number" id="scrape-max" min="1" max="15" value="5" aria-label="每词抓取上限" class="input-compact input-num" title="每个关键词抓取条数">
+            <input type="number" id="scrape-max" min="1" max="25" value="10" aria-label="每词目标新增上限" class="input-compact input-num" title="每个关键词目标新采集条数（增量跳过老岗，安全上限25）">
             <select id="scrape-mode" aria-label="刷岗账号策略" class="input-compact">
               <option value="both">双号分别刷一遍（自动去重）</option>
               <option value="single:Profile 1">仅用 Profile 1 采集</option>
@@ -314,6 +315,10 @@
                   <option value="true">开启（每日到点自动发起一次低速巡检）</option>
                   <option value="false">关闭（仅手动点击一键巡检）</option>
                 </select>
+              </label>
+              <label class="field">
+                <span>每日每词目标新增条数 (1-25，增量跳过已抓)</span>
+                <input type="number" name="scrape_max_jobs" min="1" max="25" value="10">
               </label>
               <label class="field">
                 <span>每日自动巡检时间</span>

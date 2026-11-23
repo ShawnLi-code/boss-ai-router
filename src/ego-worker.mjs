@@ -404,21 +404,56 @@ export async function scrapeBossJobs({
   minHrActive = "week",
   minDelayMs = 4500,
   maxDelayMs = 8500,
+  existingIds = [],
+  skipExisting = true,
+  filterMinSalaryK = 7,
+  excludeIntern = true,
+  excludeNonQa = true,
+  targetCityName = "广州",
+  maxClicksPerStep = 24,
   onLog = () => {},
 }) {
-  const safeMax = Math.max(1, Math.min(20, Number(maxJobs) || 8));
+  const safeMax = Math.max(1, Math.min(25, Number(maxJobs) || 8));
   const safeMinDelay = Math.max(3000, Number(minDelayMs) || 4500);
   const safeMaxDelay = Math.max(safeMinDelay + 1000, Number(maxDelayMs) || 8500);
+  const safeClickBudget = Math.max(safeMax + 4, Math.min(28, Number(maxClicksPerStep) || 24));
 
   acquireLock(`抓取 Boss 岗位「${query}」(${profileId})`);
   try {
-    onLog(`启动低频真人模拟抓取：配置 ${profileId}，关键词「${query}」，活跃度门槛「${minHrActive}」，上限 ${safeMax} 条，间隔 ${safeMinDelay}-${safeMaxDelay}ms`);
+    onLog(`启动增量低频采集：配置 ${profileId}，关键词「${query}」，目标新增 ${safeMax} 条（跳过 ${existingIds.length} 条已知岗，点击上限 ${safeClickBudget}）`);
     const searchUrl = `https://www.zhipin.com/web/geek/jobs?query=${encodeURIComponent(query)}&city=${encodeURIComponent(city)}`;
     const code = `
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const randDelay = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
+const knownSet = new Set(${JSON.stringify(existingIds)});
+const skipExisting = ${JSON.stringify(Boolean(skipExisting))};
+const filterMinSalaryK = ${JSON.stringify(Number(filterMinSalaryK ?? 7))};
+const excludeIntern = ${JSON.stringify(Boolean(excludeIntern))};
+const excludeNonQa = ${JSON.stringify(Boolean(excludeNonQa))};
+const targetCityName = ${JSON.stringify(String(targetCityName || "广州").replace(/市$/, ""))};
+const maxClickBudget = ${safeClickBudget};
+
+function parseSalaryMinK(sal) {
+  const s = String(sal || "");
+  if (!s || /面议/.test(s)) return null;
+  const dayM = s.match(/(\\d+(?:\\.\\d+)?)\\s*[-~到至]?\\s*\\d*\\s*元?\\s*\\/\\s*天/);
+  if (dayM) return Number(((Number(dayM[1]) * 21.75) / 1000).toFixed(1));
+  const kM = s.match(/(\\d+(?:\\.\\d+)?)\\s*[-~到至]\\s*\\d+(?:\\.\\d+)?\\s*[kK千]/);
+  if (kM) return Number(kM[1]);
+  const sM = s.match(/(\\d+(?:\\.\\d+)?)\\s*[kK千]/);
+  return sM ? Number(sM[1]) : null;
+}
 
 const task = await taskSpace("boss-scrape-jobs-" + Date.now(), { profileId: ${JSON.stringify(profileId)} });
+let handedOff = false;
+const collected = [];
+const seenIds = new Set();
+let skippedExisting = 0;
+let skippedPreFilter = 0;
+let detailClicks = 0;
+let scannedIdx = 0;
+
+try {
 const page = (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
 await page.goto(${JSON.stringify(searchUrl)}, { waitUntil: "domcontentloaded", timeout: 30000 });
 await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
@@ -433,31 +468,97 @@ async function checkVerify() {
 }
 
 if (await checkVerify()) {
+  handedOff = true;
   await task.handOff();
   console.log("RESULT_JSON:" + JSON.stringify({
     status: "VERIFICATION_REQUIRED",
     taskSpaceId: task.spaceId,
     url: await page.url(),
     jobs: [],
+    stats: { scannedCards: 0, detailClicks: 0, skippedExisting: 0, skippedPreFilter: 0 },
   }));
   process.exit(0);
 }
 
-const collected = [];
-const seenIds = new Set();
 const totalTarget = ${safeMax};
+const maxScanCards = Math.min(105, totalTarget * 5 + 15);
+let scrollStalls = 0;
 
-for (let idx = 0; idx < totalTarget + 6 && collected.length < totalTarget; idx++) {
-  const cardCount = await page.evaluate(() => document.querySelectorAll(".job-card-wrap").length);
-  if (idx >= cardCount) {
-    // 温和滚动加载更多
-    await page.mouse.wheel(0, 560, { label: "scroll job list slowly" });
-    await page.waitForTimeout(randDelay(2000, 3200));
+for (let idx = 0; idx < maxScanCards && collected.length < totalTarget && detailClicks < maxClickBudget; idx++) {
+  scannedIdx = idx + 1;
+  let cardCount = await page.evaluate(() => document.querySelectorAll(".job-card-wrap").length);
+  while (idx >= cardCount && scrollStalls < 3) {
+    // 滚到底部触发 Boss 无限滚动加载更多（15 -> 30 -> 45...）
+    await page.evaluate(() => {
+      const cards = document.querySelectorAll(".job-card-wrap");
+      cards[cards.length - 1]?.scrollIntoView({ block: "end" });
+      window.scrollBy(0, 620);
+    }).catch(() => {});
+    await page.mouse.wheel(0, 560, { label: "scroll job list slowly" }).catch(() => {});
+    await page.waitForTimeout(randDelay(2200, 3400));
     const afterCount = await page.evaluate(() => document.querySelectorAll(".job-card-wrap").length);
-    if (idx >= afterCount) break;
+    if (afterCount <= cardCount) {
+      scrollStalls++;
+      if (scrollStalls >= 2) break;
+    } else {
+      scrollStalls = 0;
+    }
+    cardCount = afterCount;
+  }
+  if (idx >= cardCount) break;
+
+  // 在列表卡片层面先读 Vue 元数据：已知岗位 & 明显杂岗直接零点击跳过，大幅降低风控命中
+  const listMeta = await page.evaluate((i) => {
+    const el = document.querySelectorAll(".job-card-wrap")[i];
+    if (!el) return null;
+    const d = el.__vue__?.data || {};
+    const href = el.querySelector("a.job-name")?.getAttribute("href") || "";
+    const encId = d.encryptJobId || href.split("?")[0] || "";
+    return {
+      encryptId: encId,
+      jobName: d.jobName || (el.querySelector(".job-name")?.innerText || "").trim(),
+      brandName: d.brandName || "",
+      salaryDesc: d.salaryDesc || "",
+      jobExperience: d.jobExperience || "",
+      daysPerWeekDesc: d.daysPerWeekDesc || "",
+      cityName: d.cityName || "",
+      outland: Boolean(d.outland),
+    };
+  }, idx);
+  if (!listMeta) break;
+
+  if (skipExisting && listMeta.encryptId && (knownSet.has(listMeta.encryptId) || seenIds.has(listMeta.encryptId))) {
+    skippedExisting++;
+    continue;
   }
 
-  // 计算卡片非链接区域的坐标并真人点击，确保右侧详情同步切换
+  // 列表零点击预筛：拦截实习、明显5年以上、低于最低薪资、<本市异地>与明显非测试岗位
+  let preSkipReason = "";
+  const t = String(listMeta.jobName || "");
+  const exp = String(listMeta.jobExperience || "");
+  if (excludeIntern && (/实习|兼职|校招|管培生|暑期/.test(t) || listMeta.daysPerWeekDesc || /(天\\/周|个月|在校|应届)/.test(exp))) {
+    preSkipReason = "实习/应届";
+  } else if (/^(?:5-10年|5年以上|10年以上)/.test(exp)) {
+    preSkipReason = "经验>=5年";
+  } else if (filterMinSalaryK > 0) {
+    const salMin = parseSalaryMinK(listMeta.salaryDesc);
+    if (salMin !== null && salMin < filterMinSalaryK) preSkipReason = "低于起薪";
+  }
+  if (!preSkipReason && (listMeta.outland || (listMeta.cityName && targetCityName && !listMeta.cityName.includes(targetCityName)))) {
+    preSkipReason = "异地";
+  }
+  if (!preSkipReason && excludeNonQa) {
+    const obviousNonQa = /销售|商务|BD|客服|运营|产品经理|产品专家|产品策划|Java开发|前端开发|后端开发|全栈开发|算法工程师|解决方案工程师|实施工程师|自动驾驶|智能驾驶|智驾测试|路测员|安全员|动环|充电桩|电气.*调试|自控调试|硬件测试|元器件测试|整车集成|车身域|EMC|安规|射频测试|测试\\s*[\\/／]\\s*(?:C|Java|Python|开发)/i.test(t);
+    if (obviousNonQa && !/软件测试|AI测试|大模型测试|模型评测|AI评测/.test(t)) {
+      preSkipReason = "明显非软件AI测";
+    }
+  }
+  if (preSkipReason) {
+    skippedPreFilter++;
+    continue;
+  }
+
+  // 通过列表预筛后才执行真人点击读取详情
   const targetPoint = await page.evaluate((i) => {
     const cards = document.querySelectorAll(".job-card-wrap");
     const el = cards[i];
@@ -476,20 +577,22 @@ for (let idx = 0; idx < totalTarget + 6 && collected.length < totalTarget; idx++
   await page.waitForTimeout(randDelay(700, 1400));
   await page.mouse.move(targetPoint.x, targetPoint.y, { steps: 6, label: "move to job card" }).catch(() => {});
   await page.mouse.click(targetPoint.x, targetPoint.y, { label: "select job card" });
+  detailClicks++;
   await page.waitForTimeout(randDelay(1800, 3000));
 
   if (await checkVerify()) {
+    handedOff = true;
     await task.handOff();
     console.log("RESULT_JSON:" + JSON.stringify({
       status: "VERIFICATION_REQUIRED",
       taskSpaceId: task.spaceId,
       url: await page.url(),
       jobs: collected,
+      stats: { scannedCards: scannedIdx, detailClicks, skippedExisting, skippedPreFilter },
     }));
     process.exit(0);
   }
 
-  // 等待右侧详情切换至当前点击的岗位
   if (targetPoint.expectedEncryptId) {
     await page.waitForFunction(
       (expId) => {
@@ -501,10 +604,13 @@ for (let idx = 0; idx < totalTarget + 6 && collected.length < totalTarget; idx++
     ).catch(() => {});
   }
 
-  // 模拟阅读右侧 JD 滚动
   await page.mouse.move(780, 420, { steps: 5, label: "move to job detail" }).catch(() => {});
   await page.mouse.wheel(0, 240, { label: "read jd details" }).catch(() => {});
   await page.waitForTimeout(randDelay(${safeMinDelay}, ${safeMaxDelay}));
+  // 每连续查看 8 个新详情额外冷却停顿，降低连击频次特征
+  if (detailClicks > 0 && detailClicks % 8 === 0) {
+    await page.waitForTimeout(randDelay(4500, 7500));
+  }
 
   const item = await page.evaluate((i) => {
     const cardEl = document.querySelectorAll(".job-card-wrap")[i];
@@ -566,6 +672,7 @@ for (let idx = 0; idx < totalTarget + 6 && collected.length < totalTarget; idx++
     if (!act || activePolicy === "all") return true;
     if (/离线|半年前|3月前|半年内|三月内|2月前/.test(act)) return false;
     if (activePolicy === "today") return /在线|刚刚|分钟|小时|今日/.test(act);
+    if (activePolicy === "3days") return /在线|刚刚|分钟|小时|今日|昨日|3日|[1-3]天内/.test(act);
     if (activePolicy === "week") return /在线|刚刚|分钟|小时|今日|昨日|天内|本周|3日|7日/.test(act);
     if (activePolicy === "month") return !/半年前|3月前|三月内|半年内/.test(act);
     return true;
@@ -579,26 +686,32 @@ for (let idx = 0; idx < totalTarget + 6 && collected.length < totalTarget; idx++
   if (item && item.company_name && item.job_title && !seenIds.has(item.external_id)) {
     seenIds.add(item.external_id);
     collected.push(item);
-    console.error(\`[SCRAPED \${collected.length}/\${totalTarget}] \${item.company_name} | \${item.job_title} | \${item.scale} | \${item.financing}\`);
+    console.error(\`[SCRAPED \${collected.length}/\${totalTarget}] \${item.company_name} | \${item.job_title} | \${item.salary_range}\`);
+  }
+}
+} finally {
+  if (!handedOff) {
+    await task.finish({ keep: [] }).catch(() => {});
   }
 }
 
-await task.finish({ keep: [] });
 console.log("RESULT_JSON:" + JSON.stringify({
   status: "OK",
   taskSpaceId: task.spaceId,
   jobs: collected,
+  stats: { scannedCards: scannedIdx, detailClicks, skippedExisting, skippedPreFilter },
 }));
 `;
-    const { combined, stderr } = await runEgoScript("scrape-jobs", code, 300_000);
+    const { combined, stderr } = await runEgoScript("scrape-jobs", code, Math.max(300_000, safeClickBudget * 14_000));
     if (stderr) {
       for (const line of stderr.split(/\r?\n/).filter((l) => l && !l.startsWith("RESULT_JSON:"))) onLog(line);
     }
     const res = parseMarkedJson(combined);
+    const st = res.stats || {};
     if (res.status === "VERIFICATION_REQUIRED") {
-      onLog(`⚠️ 抓取过程中遇到安全验证（TaskSpace #${res.taskSpaceId}），已停止抓取并交出控制权！已保留之前抓到的 ${res.jobs.length} 条岗位。`);
+      onLog(`⚠️ 抓取过程中遇到安全验证（TaskSpace #${res.taskSpaceId}），已停止并交出控制权！已省 ${st.skippedExisting || 0}+${st.skippedPreFilter || 0} 次点击，抓到 ${res.jobs.length} 条。`);
     } else {
-      onLog(`✅ 抓取完成，共安全获取 ${res.jobs.length} 条岗位数据。`);
+      onLog(`✅ 增量采集完成：翻扫 ${st.scannedCards || 0} 张（跳过已存 ${st.skippedExisting || 0}、预筛省点击 ${st.skippedPreFilter || 0}），实点详情 ${st.detailClicks || 0} 次，新采 ${res.jobs.length} 条。`);
     }
     return res;
   } finally {

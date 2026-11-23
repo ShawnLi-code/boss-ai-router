@@ -58,6 +58,7 @@ function analyzeCreditDetails(items = []) {
   const regCapMatch = joined.match(/注册资本\s*([0-9.]+\s*[万亿]?(?:人民币|美元|港元)?)/);
   const paidCapMatch = joined.match(/实缴资本\s*([0-9.]+\s*[万亿]?(?:人民币|美元|港元)?)/);
   const scoreMatch = joined.match(/(?:天眼查|企业)?评分\s*[:：]?\s*(\d{1,3})/);
+  const insuredMatch = joined.match(/参保人数\s*[:：]?\s*(\d+)\s*人?/);
 
   const warnings = [];
   let shellRisk = false;
@@ -67,6 +68,15 @@ function analyzeCreditDetails(items = []) {
       shellRisk = true;
       warnings.push(`实缴资本偏低(${paidCapMatch[1]})`);
     }
+  }
+  const insuredCount = insuredMatch ? Number(insuredMatch[1]) : null;
+  if (insuredCount !== null && insuredCount < 5) {
+    shellRisk = true;
+    warnings.push(`参保人数极少(${insuredCount}人)`);
+  }
+  const curYear = new Date().getFullYear();
+  if (estMatch && curYear - Number(estMatch[1]) <= 1) {
+    warnings.push(`新成立企业(${estMatch[1]}年)`);
   }
   if (scoreMatch && Number(scoreMatch[1]) < 50) {
     warnings.push(`三方评分偏低(${scoreMatch[1]})`);
@@ -80,6 +90,7 @@ function analyzeCreditDetails(items = []) {
     established_year: estMatch ? estMatch[1] : "",
     registered_capital: regCapMatch ? regCapMatch[1].trim() : "",
     paid_capital: paidCapMatch ? paidCapMatch[1].trim() : "",
+    insured_count: insuredCount,
     third_party_score: scoreMatch ? Number(scoreMatch[1]) : null,
     shell_risk: shellRisk,
     warnings,
@@ -173,8 +184,12 @@ export function analyzeSearchSnippets(companyName, input = []) {
 
   const summaryParts = [];
   if (detectedFullName && detectedFullName !== companyName) summaryParts.push(`核验全称：${detectedFullName}`);
-  if (credit.established_year || credit.paid_capital) {
-    summaryParts.push([credit.established_year ? `${credit.established_year}年成立` : "", credit.paid_capital ? `实缴${credit.paid_capital}` : ""].filter(Boolean).join("·"));
+  if (credit.established_year || credit.paid_capital || credit.insured_count != null) {
+    summaryParts.push([
+      credit.established_year ? `${credit.established_year}年成立` : "",
+      credit.paid_capital ? `实缴${credit.paid_capital}` : "",
+      credit.insured_count != null ? `参保${credit.insured_count}人` : "",
+    ].filter(Boolean).join("·"));
   }
   if (matchedVendors.size > 0) summaryParts.push(`命中背调机构：${[...matchedVendors].join("、")}`);
   if (matchedSignals.size > 0) summaryParts.push(`查验信号：${[...matchedSignals].join("、")}`);

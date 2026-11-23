@@ -128,6 +128,12 @@ export function parseJobStructure(job) {
 
   const strictJdHits = hasUnnegatedKeyword(jd, ["严格背调", "背景调查", "大厂背景", "大厂经验", "一线大厂", "大厂优先", "BAT"]);
   const urgentJdHits = hasUnnegatedKeyword(`${title}\n${jd}`, ["急招", "急聘", "独立负责测试", "独立负责", "0到1", "从0到1", "0-1"]);
+  const fluffHits = hasUnnegatedKeyword(`${title}\n${jd}`, [
+    "每周下午茶", "老板人好", "扁平化管理", "氛围轻松", "不加班", "高颜值团队", "带薪旅游",
+  ]);
+  const hypeBangCount = (`${title}\n${jd}`.match(/[！!]{2,}/g) || []).length;
+  const openGate = /不限学历/.test(jd) && /经验不限/.test(`${job.experience_req || ""}\n${jd}`);
+  const hypeCakeRisk = (openGate && (fluffHits.length >= 1 || hypeBangCount >= 1)) || (fluffHits.length >= 2 && jd.length < 220);
 
   return {
     scale: scaleInfo,
@@ -143,6 +149,8 @@ export function parseJobStructure(job) {
     is_hrbp_or_headhunter: isHrBpOrHeadhunter,
     strict_jd_hits: strictJdHits,
     urgent_jd_hits: urgentJdHits,
+    hype_cake_risk: hypeCakeRisk,
+    fluff_hits: fluffHits,
   };
 }
 
@@ -257,11 +265,15 @@ export function evaluateJobRisk(job, intel = null, { blacklisted = null } = {}) 
   if (intel?.registered_name && intel.registered_name !== job.company_name) {
     evidence.push(`🏢 工商全称核验：${intel.registered_name}`);
   }
-  if (intel?.credit?.established_year || intel?.credit?.paid_capital || intel?.credit?.warnings?.length) {
+  if (parsed.hype_cake_risk) {
+    evidence.push(`🍰 画饼/草台班子预警：JD含空洞画饼营销特征（${[...parsed.fluff_hits, "三不限/多叹号"].slice(0, 3).join("、")}），建议查验参保人数与实缴资本`);
+  }
+  if (intel?.credit?.established_year || intel?.credit?.paid_capital || intel?.credit?.insured_count != null || intel?.credit?.warnings?.length) {
     const parts = [
       intel.credit.established_year ? `${intel.credit.established_year}年成立` : "",
       intel.credit.registered_capital ? `注册${intel.credit.registered_capital}` : "",
       intel.credit.paid_capital ? `实缴${intel.credit.paid_capital}` : "",
+      intel.credit.insured_count != null ? `参保${intel.credit.insured_count}人` : "",
       ...(intel.credit.warnings || []),
     ].filter(Boolean);
     if (parts.length) evidence.push(`🏛️ 企业资质：${parts.join(" · ")}`);

@@ -25,6 +25,7 @@ import {
   listBlacklist,
   listDeliveryLogs,
   listJobs,
+  listKnownExternalIds,
   listPatrolRuns,
   purgeFilteredJobs,
   recordPatrolRun,
@@ -236,9 +237,14 @@ async function runDailyPatrol({
       ? keywords.map((k) => String(k).trim()).filter(Boolean)
       : parseWatchlistKeywords(settings);
     const targetCity = city || settings.search_city || "101280100";
-    const targetMax = Math.max(1, Math.min(12, Number(maxPerKeyword || settings.scrape_max_jobs || 5)));
+    const targetMax = Math.max(1, Math.min(25, Number(maxPerKeyword || settings.scrape_max_jobs || 10)));
     const targetHr = minHrActive || settings.min_hr_active || "week";
     const mode = scanMode || settings.scan_mode || "both";
+    const filterMinSalaryK = settings.filter_min_salary_k === "" || settings.filter_min_salary_k == null ? 7 : Number(settings.filter_min_salary_k);
+    const excludeIntern = settings.filter_exclude_intern !== "false";
+    const excludeNonQa = settings.filter_exclude_non_qa !== "false";
+    const targetCityName = settings.search_city_name || "广州";
+    const MAX_PROFILE_CLICKS_PER_RUN = 80;
 
     const allKnownProfiles = [...new Set(tracks.map((t) => t.profile_id).filter(Boolean))];
     let targetProfiles = mode === "both"
@@ -270,8 +276,13 @@ async function runDailyPatrol({
 
     for (const pid of targetProfiles) {
       touchedProfiles.push(pid);
+      let profileClicks = 0;
       for (const kw of targetKeywords) {
         stepIndex++;
+        if (profileClicks >= MAX_PROFILE_CLICKS_PER_RUN) {
+          logEvent(`🛡️ ${pid} 本轮详情点击已达 ${MAX_PROFILE_CLICKS_PER_RUN} 次风控上限，跳过「${kw}」保护账号`, "warn");
+          continue;
+        }
         broadcast("patrol-progress", {
           step: stepIndex,
           total: totalSteps,
@@ -279,8 +290,9 @@ async function runDailyPatrol({
           keyword: kw,
           savedCount: totalSaved,
         });
-        logEvent(`巡检进度 [${stepIndex}/${totalSteps}]：使用 ${pid} 低速扫描「${kw}」...`);
+        logEvent(`巡检进度 [${stepIndex}/${totalSteps}]：使用 ${pid} 增量扫描「${kw}」...`);
 
+        const knownIds = listKnownExternalIds();
         const scrapeRes = await scrapeBossJobs({
           profileId: pid,
           query: kw,
@@ -289,8 +301,17 @@ async function runDailyPatrol({
           minHrActive: targetHr,
           minDelayMs: settings.delay_min_ms ?? 4500,
           maxDelayMs: settings.delay_max_ms ?? 8500,
+          existingIds: knownIds,
+          skipExisting: true,
+          filterMinSalaryK,
+          excludeIntern,
+          excludeNonQa,
+          targetCityName,
+          maxClicksPerStep: Math.min(24, MAX_PROFILE_CLICKS_PER_RUN - profileClicks + 2),
           onLog: (m) => logEvent(m),
         });
+        const stepClicks = Number(scrapeRes.stats?.detailClicks || 0);
+        profileClicks += stepClicks;
 
         const scrapedJobs = scrapeRes.jobs || [];
         if (settings.auto_web_search !== "false" && scrapedJobs.length > 0) {
@@ -319,12 +340,15 @@ async function runDailyPatrol({
           scanned: batch.saved.length,
           new_count: batch.newCount,
           kept: batch.keptCount,
+          skipped_existing: scrapeRes.stats?.skippedExisting || 0,
+          skipped_prefilter: scrapeRes.stats?.skippedPreFilter || 0,
+          detail_clicks: stepClicks,
         });
 
         if (scrapeRes.status === "VERIFICATION_REQUIRED") {
           tripProfileBreaker(pid, `巡检「${kw}」时触发安全验证`);
           broadcast("verification", scrapeRes);
-          const verifySummary = `${new Date().toLocaleString("zh-CN", { hour12: false })} · ${pid} 在「${kw}」触发验证中断，已累计扫描 ${totalSaved} 条（新入库 ${totalNew} 条）`;
+          const verifySummary = `${new Date().toLocaleString("zh-CN", { hour12: false })} · ${pid} 在「${kw}」触发验证中断，已累计增量入库 ${totalNew} 条`;
           saveSettings({
             last_daily_check_date: todayStr(),
             last_daily_check_summary: verifySummary,
@@ -355,7 +379,9 @@ async function runDailyPatrol({
         }
 
         if (stepIndex < totalSteps) {
-          const pauseMs = 2600 + Math.floor(Math.random() * 2000);
+          const pauseMs = stepClicks > 0
+            ? (3600 + Math.floor(Math.random() * 2600))
+            : (1300 + Math.floor(Math.random() * 900));
           await new Promise((r) => setTimeout(r, pauseMs));
         }
       }
@@ -697,14 +723,21 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
+      const knownIds = body.skipExisting === false ? [] : listKnownExternalIds();
       const scrapeRes = await scrapeBossJobs({
         profileId,
         query: body.query || settings.search_query || "AI测试",
         city: body.city || settings.search_city || "101280100",
-        maxJobs: body.maxJobs ?? settings.scrape_max_jobs ?? 8,
+        maxJobs: body.maxJobs ?? settings.scrape_max_jobs ?? 10,
         minHrActive: body.minHrActive || settings.min_hr_active || "week",
         minDelayMs: body.minDelayMs ?? settings.delay_min_ms ?? 4500,
         maxDelayMs: body.maxDelayMs ?? settings.delay_max_ms ?? 8500,
+        existingIds: knownIds,
+        skipExisting: body.skipExisting !== false,
+        filterMinSalaryK: settings.filter_min_salary_k === "" || settings.filter_min_salary_k == null ? 7 : Number(settings.filter_min_salary_k),
+        excludeIntern: settings.filter_exclude_intern !== "false",
+        excludeNonQa: settings.filter_exclude_non_qa !== "false",
+        targetCityName: settings.search_city_name || "广州",
         onLog: (m) => logEvent(m),
       });
 

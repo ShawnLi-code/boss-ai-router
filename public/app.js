@@ -693,6 +693,24 @@ async function renderInspector(fetchFresh = false) {
           <textarea id="insp-greeting" rows="3" maxlength="120">${esc(job.custom_greeting || "")}</textarea>
         </div>
 
+        <details style="margin-top:2px;">
+          <summary class="muted" style="cursor:pointer;">HR 回复后探底 4 连问（防踩坑话术）与投递时机建议</summary>
+          <div class="surface-box" style="margin-top:8px;gap:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+              <strong>破冰回复后实用 4 问（排查一人多岗 / 单双休 / 社保基数 / 绩效）</strong>
+              <button type="button" class="btn btn-secondary btn-xs" id="insp-copy-probe">一键复制 4 问</button>
+            </div>
+            <div class="code-box" id="insp-probe-text" style="max-height:none;">您好，进一步沟通前想确认几个基础问题方便双向评估：
+1. 该岗位日常核心工作内容主要是软件/AI测试本身，还是会涉及跨岗杂活？
+2. 团队目前的工作时间与休假安排是标准双休吗？是否涉及倒班？
+3. 五险一金是入职即按全额工资还是最低基数缴纳？
+4. 薪资 ${esc(job.salary_range || "9-12K")} 是全额固定底薪，还是包含绩效浮动？谢谢！</div>
+            <div class="muted" style="font-size:12px;">
+              💡 <strong>提效建议：</strong>周日晚上或睡前（20:30-22:30）及工作日早 9:30-10:30 沟通更容易排在 HR 收件箱前排；若推荐总重复，可用一个副号在 Boss 隐私中临时隐藏在线简历，配合软件增量扫新公司。${matchObj.matched_keywords?.length ? ` 本岗重点面试核验点：<strong>${esc(matchObj.matched_keywords.slice(0, 4).join("、"))}</strong>${matchObj.missing_must_haves?.length ? `（建议提前补强 ${esc(matchObj.missing_must_haves.slice(0, 2).join("、"))} 案例）` : ""}。` : ""}
+            </div>
+          </div>
+        </details>
+
         <div class="right-row">
           <button type="button" class="btn btn-secondary btn-sm" id="insp-export-pdf">导出2年定制 PDF</button>
           <a class="btn btn-ghost btn-sm" href="/resume-print.html?jobId=${job.id}&track=${esc(state.data?.settings?.primary_resume_track || "A")}" target="_blank">打印预览</a>
@@ -720,6 +738,7 @@ async function renderInspector(fetchFresh = false) {
             ${credit.established_year ? `<span class="meta-pill">成立：${esc(credit.established_year)}年</span>` : ""}
             ${credit.registered_capital ? `<span class="meta-pill">注册：${esc(credit.registered_capital)}</span>` : ""}
             ${credit.paid_capital ? `<span class="meta-pill">实缴：${esc(credit.paid_capital)}</span>` : ""}
+            ${credit.insured_count != null ? `<span class="meta-pill">参保：${esc(credit.insured_count)}人</span>` : ""}
             ${rep.negative_tags?.length ? `<span class="zone-tag zone-RED">雷区预警：${esc(rep.negative_tags.join("、"))}</span>` : ""}
           </div>
           <ul class="evidence-list">
@@ -785,6 +804,14 @@ async function renderInspector(fetchFresh = false) {
       greetingEl.select();
       document.execCommand("copy");
     }
+  });
+
+  document.getElementById("insp-copy-probe")?.addEventListener("click", async () => {
+    const txt = document.getElementById("insp-probe-text")?.textContent || "";
+    try {
+      await navigator.clipboard.writeText(txt);
+      els.liveLogLatest.textContent = "已复制 HR 探底 4 连问话术到剪贴板";
+    } catch {}
   });
 
   document.getElementById("insp-open-page").addEventListener("click", async () => {
@@ -1216,6 +1243,7 @@ function renderSettings() {
   form.watchlist_text.value = state.watchlist.join("、");
   form.home_address.value = settings.home_address || "";
   form.home_city.value = settings.home_city || "广州";
+  if (form.scrape_max_jobs) form.scrape_max_jobs.value = settings.scrape_max_jobs || "10";
   form.daily_check_enabled.value = settings.daily_check_enabled || "true";
   form.daily_check_time.value = settings.daily_check_time || "09:30";
   form.scan_mode.value = settings.scan_mode === "single" ? "single" : "both";

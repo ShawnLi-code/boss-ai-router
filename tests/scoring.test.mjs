@@ -4,7 +4,7 @@ import { evaluateJobRisk, shouldTriggerWebSearch } from "../src/scoring.mjs";
 import { analyzeSearchSnippets } from "../src/websearch.mjs";
 import { DEFAULT_TARGET_ROLES, evaluateJobEligibility, evaluateSalaryFit, factGuardCheck, matchResumeToJob, parseSalaryRangeK } from "../src/matcher.mjs";
 import { calculateBikePlusMetroMetrics } from "../src/commute.mjs";
-import { db, getScrapeTelemetry, listPatrolRuns, normalizeCompanyRoot, recordPatrolRun } from "../src/db.mjs";
+import { db, getScrapeTelemetry, listKnownExternalIds, listPatrolRuns, normalizeCompanyRoot, recordPatrolRun } from "../src/db.mjs";
 import { compareSemver } from "../src/updater.mjs";
 
 test("RED zone: 银行/金融 + 实锤第三方背调 + HRBP 应命中 A轨_真实日期版", () => {
@@ -516,6 +516,40 @@ test("抓取记录与留存统计：patrol_runs 写入读取及额度核算", ()
     db.prepare("DELETE FROM patrol_runs WHERE id = ?").run(rec.id);
   }
 });
+
+test("参保人数/画饼特征预警 & 增量外部ID清单：提取参保人数并检测三不限画饼信号", () => {
+  const intel = analyzeSearchSnippets("新锐示例科技", {
+    creditItems: [
+      {
+        title: "广州新锐示例科技有限公司 - 爱企查",
+        snippet: "广州新锐示例科技有限公司成立于2025年，注册资本50万人民币，实缴资本0万人民币，参保人数 2 人。",
+        url: "https://example.com/aqc",
+      },
+    ],
+    bgItems: [],
+    repItems: [],
+  });
+  assert.equal(intel.credit.insured_count, 2);
+  assert.ok(intel.credit.warnings.some((w) => w.includes("参保人数极少")));
+  assert.ok(intel.credit.warnings.some((w) => w.includes("新成立企业")));
+
+  const risk = evaluateJobRisk(
+    {
+      company_name: "新锐示例科技",
+      job_title: "AI测试工程师！！！！",
+      experience_req: "经验不限",
+      jd_text: "不限学历，经验不限，每周下午茶，老板人好，氛围轻松！",
+    },
+    intel
+  );
+  assert.equal(risk.parsed.hype_cake_risk, true);
+  assert.ok(risk.evidence.some((e) => e.includes("画饼/草台班子预警")));
+  assert.ok(risk.evidence.some((e) => e.includes("参保2人")));
+
+  const knownIds = listKnownExternalIds();
+  assert.ok(Array.isArray(knownIds));
+});
+
 
 
 
