@@ -907,6 +907,51 @@ export function updateDeliveryLogSnapshot(id, patch = {}) {
   return db.prepare("SELECT * FROM delivery_logs WHERE id = ?").get(id);
 }
 
+/**
+ * 为一条 Boss 聊天会话匹配唯一的本地岗位（避免同公司多岗位扇出产生多条重复沟通卡）。
+ */
+export function pickBestMatchedJobForChat(allJobs = [], existingLogs = [], chat = {}, profileId = "") {
+  if (chat.external_id) {
+    const exactExt = allJobs.find((j) => j.external_id && j.external_id === chat.external_id);
+    if (exactExt) return exactExt;
+  }
+  const cRoot = normalizeCompanyRoot(chat.company_name);
+  let candidates = allJobs.filter((j) => {
+    if (chat.company_name) {
+      if (j.company_name === chat.company_name) return true;
+      if (cRoot && j.normalized_company && (j.normalized_company === cRoot || j.normalized_company.includes(cRoot) || cRoot.includes(j.normalized_company))) {
+        return true;
+      }
+    }
+    return Boolean(chat.raw_text && j.company_name && chat.raw_text.includes(j.company_name));
+  });
+  if (candidates.length === 0) return null;
+
+  const sameProfileCands = candidates.filter((j) => j.source_profile_id === profileId);
+  if (sameProfileCands.length > 0) candidates = sameProfileCands;
+
+  const candIds = new Set(candidates.map((j) => j.id));
+  const loggedMatch = existingLogs.find((l) => l.status === "DELIVERED" && candIds.has(l.job_id) && l.profile_id === profileId)
+    || existingLogs.find((l) => l.status === "DELIVERED" && candIds.has(l.job_id));
+  if (loggedMatch) {
+    const found = candidates.find((j) => j.id === loggedMatch.job_id);
+    if (found) return found;
+  }
+
+  const chatTitle = String(chat.job_title || "").trim();
+  const scored = candidates.map((j) => {
+    let score = (j.match_score || 0) * 0.1;
+    if (j.source_profile_id === profileId) score += 15;
+    if (chatTitle && j.job_title) {
+      if (j.job_title === chatTitle) score += 25;
+      else if (j.job_title.includes(chatTitle) || chatTitle.includes(j.job_title)) score += 12;
+    }
+    return { job: j, score };
+  });
+  scored.sort((a, b) => b.score - a.score || b.job.id - a.job.id);
+  return scored[0]?.job || null;
+}
+
 export function hasJobExternalId(externalId) {
   if (!externalId) return false;
   return Boolean(db.prepare("SELECT 1 FROM jobs WHERE external_id = ?").get(externalId));

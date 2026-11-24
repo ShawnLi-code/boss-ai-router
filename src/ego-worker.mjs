@@ -1135,6 +1135,35 @@ console.log("RESULT_JSON:" + JSON.stringify({
   }
 }
 
+export async function fetchBossProfilePhone({ profileId, onLog = () => {} }) {
+  acquireLock(`识别 Boss 绑定手机号 (${profileId})`);
+  try {
+    const code = `
+const task = await taskSpace("boss-phone-" + Date.now(), { profileId: ${JSON.stringify(profileId)} });
+try {
+  const page = (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
+  await page.goto("https://www.zhipin.com/web/geek/resume", { waitUntil: "domcontentloaded", timeout: 25000 });
+  await page.waitForTimeout(1800);
+  const res = await page.evaluate(() => {
+    const txt = (document.querySelector(".resume-baseInfo, .resume-userinfo")?.innerText || document.body?.innerText || "");
+    const m = txt.match(/1[3-9]\\d[\\d*]{4,8}\\d{2,4}/);
+    return { phone: m ? m[0] : "" };
+  });
+  await task.finish({ keep: [] });
+  console.log("RESULT_JSON:" + JSON.stringify({ status: "OK", phone: res.phone }));
+} finally {
+  await task.finish({ keep: [] }).catch(() => {});
+}
+`;
+    const { combined } = await runEgoScript("fetch-phone", code, 45_000);
+    const parsed = parseMarkedJson(combined);
+    if (parsed.phone) onLog(`📱 已识别 ${profileId} 绑定手机号：${parsed.phone}`);
+    return parsed;
+  } finally {
+    releaseLock();
+  }
+}
+
 export async function syncBossContactedChats({ profileId, maxItems = 60, onLog = () => {} }) {
   acquireLock(`同步 Boss 历史沟通记录 (${profileId})`);
   try {

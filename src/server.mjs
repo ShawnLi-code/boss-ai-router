@@ -30,6 +30,7 @@ import {
   listKnownExternalIds,
   listPatrolRuns,
   normalizeCompanyRoot,
+  pickBestMatchedJobForChat,
   purgeFilteredJobs,
   recordPatrolRun,
   removeBlacklistCompany,
@@ -57,6 +58,7 @@ import { analyzeConversationAndSuggestReplies, generateContextualReplies } from 
 import {
   enrichJobDetailsAndCommuteViaEgo,
   fetchBossConversationMessages,
+  fetchBossProfilePhone,
   finishEgoSpace,
   generateResumePdfViaEgo,
   getActiveLock,
@@ -692,6 +694,20 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, state: buildStatePayload() });
     }
 
+    if (req.method === "POST" && pathname === "/api/tracks/sync-phones") {
+      const tracks = getAccountTracks();
+      const updated = [];
+      for (const tr of tracks) {
+        if (!tr.profile_id) continue;
+        const r = await fetchBossProfilePhone({ profileId: tr.profile_id, onLog: (m) => logEvent(m) }).catch(() => ({}));
+        if (r?.phone) {
+          updateAccountTrack(tr.track_key, { profile_name: r.phone });
+          updated.push({ track_key: tr.track_key, phone: r.phone });
+        }
+      }
+      return sendJson(res, 200, { ok: true, updated, state: buildStatePayload() });
+    }
+
     const resumeSyncMatch = pathname.match(/^\/api\/resumes\/([AB])\/sync$/);
     if (req.method === "POST" && resumeSyncMatch) {
       const key = resumeSyncMatch[1];
@@ -1276,6 +1292,14 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
       const matchedCompanies = [];
 
       for (const pid of targetProfiles) {
+        const tTrack = tracks.find((t) => t.profile_id === pid) || tracks[0];
+        if (tTrack && !/^1[3-9]\d/.test(tTrack.profile_name || "")) {
+          const phoneRes = await fetchBossProfilePhone({ profileId: pid, onLog: (m) => logEvent(m) }).catch(() => ({}));
+          if (phoneRes?.phone) {
+            updateAccountTrack(tTrack.track_key, { profile_name: phoneRes.phone });
+            tTrack.profile_name = phoneRes.phone;
+          }
+        }
         const resSync = await syncBossContactedChats({
           profileId: pid,
           maxItems: 60,
@@ -1284,26 +1308,11 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
         if (resSync.status === "VERIFICATION_REQUIRED") {
           return sendJson(res, resSync.taskSpaceId ? 202 : 200, { ...resSync, syncedCount, updatedCount, state: buildStatePayload() });
         }
-        const tTrack = tracks.find((t) => t.profile_id === pid) || tracks[0];
         for (const ch of resSync.chats || []) {
-          const cRoot = normalizeCompanyRoot(ch.company_name);
-          let matchedJobs = ch.external_id
-            ? allJobs.filter((j) => j.external_id && j.external_id === ch.external_id)
-            : [];
-          if (matchedJobs.length === 0) {
-            matchedJobs = allJobs.filter((j) => {
-              const sameCompany = ch.company_name && (j.company_name === ch.company_name || (cRoot && j.normalized_company && (j.normalized_company === cRoot || j.normalized_company.includes(cRoot) || cRoot.includes(j.normalized_company))));
-              if (sameCompany) {
-                if (j.source_profile_id && j.source_profile_id !== pid && allJobs.some((x) => x.company_name === j.company_name && x.source_profile_id === pid)) {
-                  return false;
-                }
-                if (!ch.job_title) return true;
-                return j.job_title === ch.job_title || j.job_title.includes(ch.job_title) || ch.job_title.includes(j.job_title);
-              }
-              return ch.raw_text && j.company_name && ch.raw_text.includes(j.company_name);
-            });
-          }
-          for (const mj of matchedJobs) {
+          const mj = pickBestMatchedJobForChat(allJobs, existingLogs, ch, pid);
+          if (!mj) continue;
+          const matchedJobs = [mj];
+          for (const mjItem of matchedJobs) {
             const existingRow = existingLogs.find((l) => l.job_id === mj.id && l.status === "DELIVERED");
             const nextStatus = ch.hr_replied ? "REPLIED" : "DELIVERED";
             const prevMsgs = Array.isArray(mj.chat_messages) ? [...mj.chat_messages] : [];

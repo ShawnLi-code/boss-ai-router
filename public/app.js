@@ -352,6 +352,13 @@ async function loadEgoProfiles() {
   renderProfileSelectors();
 }
 
+function profileDisplayName(profileId) {
+  const tr = (state.data?.tracks || []).find((t) => t.profile_id === profileId);
+  if (tr?.profile_name) return tr.profile_name;
+  const ep = (state.egoProfiles || []).find((p) => p.id === profileId);
+  return ep?.name || profileId || "默认账号";
+}
+
 function updateBatchBarUi() {
   if (!els.batchDeliverBar || !els.btnToggleBatch) return;
   els.batchDeliverBar.hidden = !state.batchMode;
@@ -375,7 +382,7 @@ function updateBatchBarUi() {
     els.batchProfileSelect.innerHTML = `<option value="auto">🤖 智能分流防撞车</option>` + pool.map((p) => {
       const tr = tracks.find((t) => t.profile_id === p.id);
       const qTxt = tr ? ` (${tr.today_delivered}/${tr.daily_limit}${tr.breaker_active ? " 暂停" : ""})` : "";
-      return `<option value="${esc(p.id)}" ${prev === p.id ? "selected" : ""}>${esc(p.name)}${esc(qTxt)}</option>`;
+      return `<option value="${esc(p.id)}" ${prev === p.id ? "selected" : ""}>${esc(profileDisplayName(p.id))}${esc(qTxt)}</option>`;
     }).join("");
   }
   if (els.batchSendImgChk && state.data) {
@@ -424,11 +431,11 @@ function renderSidebarSummary() {
   const t1 = tracks[0];
   const t2 = tracks[1];
   if (t1) {
-    els.sideALabel.textContent = `${t1.profile_name} (${t1.profile_id})`;
+    els.sideALabel.textContent = t1.profile_name || t1.profile_id;
     els.sideAQuota.textContent = `${t1.today_delivered}/${t1.daily_limit}${t1.breaker_active ? " 暂停" : ""}`;
   }
   if (t2) {
-    els.sideBLabel.textContent = `${t2.profile_name} (${t2.profile_id})`;
+    els.sideBLabel.textContent = t2.profile_name || t2.profile_id;
     els.sideBQuota.textContent = `${t2.today_delivered}/${t2.daily_limit}${t2.breaker_active ? " 暂停" : ""}`;
   }
 
@@ -498,7 +505,7 @@ function renderProfileSelectors() {
     `<option value="both" ${current === "both" ? "selected" : ""}>双号轮刷（自动去重）</option>`,
     ...list.map((p) => {
       const v = `single:${p.id}`;
-      return `<option value="${esc(v)}" ${current === v ? "selected" : ""}>仅用 ${esc(p.name)} (${esc(p.id)})</option>`;
+      return `<option value="${esc(v)}" ${current === v ? "selected" : ""}>仅用 ${esc(profileDisplayName(p.id))}</option>`;
     }),
   ];
   els.scrapeMode.innerHTML = options.join("");
@@ -779,7 +786,7 @@ async function renderInspector(fetchFresh = false) {
                   ${profilePool.map((p) => {
                     const tr = tracks.find((t) => t.profile_id === p.id);
                     const qTxt = tr ? ` ${tr.today_delivered}/${tr.daily_limit}` : "";
-                    return `<option value="${esc(p.id)}" ${p.id === preferredProfile ? "selected" : ""}>${esc(p.name)} (${esc(p.id)}${esc(qTxt)})</option>`;
+                    return `<option value="${esc(p.id)}" ${p.id === preferredProfile ? "selected" : ""}>${esc(profileDisplayName(p.id))}${esc(qTxt)}</option>`;
                   }).join("")}
                 </select>
               </label>
@@ -1949,33 +1956,45 @@ function renderDeliveries() {
     const profiles = [...new Set(convs.map((c) => c.profile_id).filter(Boolean))];
     const prev = state.deliveryProfile;
     els.deliveryProfileFilter.innerHTML = `<option value="ALL">全部账号</option>`
-      + profiles.map((pid) => `<option value="${esc(pid)}" ${prev === pid ? "selected" : ""}>${esc(pid)}</option>`).join("");
+      + profiles.map((pid) => `<option value="${esc(pid)}" ${prev === pid ? "selected" : ""}>${esc(profileDisplayName(pid))}</option>`).join("");
   }
 
   const q = state.deliverySearch.trim().toLowerCase();
-  const setCount = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = String(n); };
-  setCount("dcnt-all", convs.length);
-  setCount("dcnt-unread", unreadTotal);
-  setCount("dcnt-new-greet", newGreetCount);
-  setCount("dcnt-chatting", chattingCount);
-  setCount("dcnt-exchanged", exchangedCount);
-  setCount("dcnt-interview", interviewCount);
-  setCount("dcnt-not-interested", notIntCount);
-
-  const filtered = convs.filter((c) => {
+  const baseFiltered = convs.filter((c) => {
     if (state.deliveryProfile !== "ALL" && c.profile_id !== state.deliveryProfile) return false;
     if (state.deliveryMaterial === "TEXT_ONLY" && !(c.hasText && !c.hasImg)) return false;
     if (state.deliveryMaterial === "WITH_IMAGE" && !(c.hasText && c.hasImg)) return false;
-    if (state.deliveryFilter === "UNREAD" && !(c.unreadCount > 0)) return false;
-    if (["NEW_GREET", "CHATTING", "EXCHANGED", "INTERVIEW", "NOT_INTERESTED"].includes(state.deliveryFilter)) {
-      if (c.bossStage !== state.deliveryFilter) return false;
-    }
     if (q) {
-      const hay = `${c.company_name} ${c.job_title} ${c.profile_id} ${c.lastText} ${c.detail}`.toLowerCase();
+      const hay = `${c.company_name} ${c.job_title} ${profileDisplayName(c.profile_id)} ${c.lastText} ${c.detail}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
   });
+
+  const setCount = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = String(n); };
+  setCount("dcnt-all", baseFiltered.length);
+  setCount("dcnt-unread", baseFiltered.filter((c) => c.unreadCount > 0).length);
+  setCount("dcnt-new-greet", baseFiltered.filter((c) => c.bossStage === "NEW_GREET").length);
+  setCount("dcnt-chatting", baseFiltered.filter((c) => c.bossStage === "CHATTING").length);
+  setCount("dcnt-exchanged", baseFiltered.filter((c) => c.bossStage === "EXCHANGED").length);
+  setCount("dcnt-interview", baseFiltered.filter((c) => c.bossStage === "INTERVIEW").length);
+  setCount("dcnt-not-interested", baseFiltered.filter((c) => c.bossStage === "NOT_INTERESTED").length);
+
+  const stageMatches = (c) => {
+    if (state.deliveryFilter === "UNREAD") return c.unreadCount > 0;
+    if (["NEW_GREET", "CHATTING", "EXCHANGED", "INTERVIEW", "NOT_INTERESTED"].includes(state.deliveryFilter)) {
+      return c.bossStage === state.deliveryFilter;
+    }
+    return true;
+  };
+  let filtered = baseFiltered.filter(stageMatches);
+  if (filtered.length === 0 && state.deliveryFilter !== "ALL" && baseFiltered.length > 0) {
+    state.deliveryFilter = "ALL";
+    document.querySelectorAll(".seg-btn[data-delivery-filter]").forEach((b) => {
+      b.classList.toggle("active", b.dataset.deliveryFilter === "ALL");
+    });
+    filtered = baseFiltered;
+  }
 
   if (filtered.length === 0) {
     els.deliveriesList.innerHTML = `<p class="muted">当前标签下暂无会话。</p>`;
@@ -1997,7 +2016,7 @@ function renderDeliveries() {
             <div>
               <strong>${esc(c.company_name)}</strong>${c.job_title ? ` · <span>${esc(c.job_title)}</span>` : ""}
               ${c.salary_range ? ` <span class="meta-pill">${esc(c.salary_range)}</span>` : ""}
-              <span class="muted" style="margin-left:6px;">${esc(c.profile_id)} · ${esc(fmtTime(c.created_at))}${c.msgCount > 1 ? ` · 共${esc(c.msgCount)}条动态` : ""}</span>
+              <span class="muted" style="margin-left:6px;">${esc(profileDisplayName(c.profile_id))} · ${esc(fmtTime(c.created_at))}${c.msgCount > 1 ? ` · 共${esc(c.msgCount)}条动态` : ""}</span>
             </div>
             <div class="delivery-card-badges">
               ${deliveryConvBadgesHtml(c)}
@@ -2090,7 +2109,7 @@ function renderDeliveryLogs() {
     .map((c) => `
       <div class="log-item">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-          <span><strong>${esc(c.company_name)}</strong>${c.job_title ? ` · ${esc(c.job_title)}` : ""} · ${esc(c.profile_id)}</span>
+          <span><strong>${esc(c.company_name)}</strong>${c.job_title ? ` · ${esc(c.job_title)}` : ""} · ${esc(profileDisplayName(c.profile_id))}</span>
           <span>${deliveryConvBadgesHtml(c)}</span>
         </div>
         <div class="muted">${esc(fmtTime(c.created_at))} — ${esc(c.lastText ? c.lastText.slice(0, 80) : c.detail)}</div>
@@ -2155,7 +2174,7 @@ function renderFollowupModalBody() {
   const msgs = state.followupMessages || [];
   const hasImgAsset = Boolean(state.data?.resume_image?.exists);
 
-  els.followupModalSub.textContent = `${job.company_name} · ${job.job_title} · 账号 ${state.followupProfileId} · 当前状态：${STATUS_LABELS[job.status] || job.status}`;
+  els.followupModalSub.textContent = `${job.company_name} · ${job.job_title} · 账号 ${profileDisplayName(state.followupProfileId)} · 当前状态：${STATUS_LABELS[job.status] || job.status}`;
   els.followupImgUnlockPill.textContent = !hasImgAsset
     ? "未配置图片简历"
     : state.followupCanSendImg
