@@ -251,7 +251,7 @@ await page.waitForTimeout(900);
 const url = await page.url();
 const parsed = await page.evaluate(() => {
   const body = (document.body?.innerText || "");
-  const needVerify = /verify-slider|security|web\\/user/i.test(location.href)
+  const needVerify = /verify-slider|security-check|\\/security(?:\\/|$)|\\/web\\/user/i.test(location.pathname)
     || /请完成安全验证|拖动滑块|扫码登录|手机号登录|密码登录/.test(body.slice(0, 600));
   if (needVerify) {
     return { needVerify: true, preview: body.slice(0, 250) };
@@ -469,6 +469,20 @@ export function buildBossSearchUrl({
   return `https://www.zhipin.com/web/geek/jobs?${params.toString()}`;
 }
 
+/**
+ * 判断 Boss直聘页面是否处于登录/安全验证拦截态（只检查 pathname，避免误伤 ?securityId= 参数）。
+ */
+export function isBossVerificationUrl(rawUrl, bodyText = "") {
+  let pathname = "";
+  try {
+    pathname = new URL(String(rawUrl || "")).pathname;
+  } catch {
+    pathname = String(rawUrl || "").split("?")[0];
+  }
+  return /verify-slider|security-check|\/security(?:\/|$)|\/web\/user/i.test(pathname)
+    || /请完成安全验证|拖动滑块|点击按钮进行验证|访问异常|账号异常|扫码登录/.test(String(bodyText || ""));
+}
+
 export async function scrapeBossJobs({
   profileId,
   query = "AI测试",
@@ -550,7 +564,7 @@ await page.waitForTimeout(randDelay(2200, 3600));
 async function checkVerify() {
   return await page.evaluate(() => {
     const body = (document.body?.innerText || "").slice(0, 700);
-    return /verify-slider|security|web\\/user/i.test(location.href)
+    return /verify-slider|security-check|\\/security(?:\\/|$)|\\/web\\/user/i.test(location.pathname)
       || /请完成安全验证|拖动滑块|点击按钮进行验证|访问异常|账号异常|扫码登录/.test(body);
   });
 }
@@ -908,7 +922,7 @@ await page.waitForTimeout(randDelay(2200, 3600));
 
 const verifyState = await page.evaluate(() => {
   const body = (document.body?.innerText || "").slice(0, 700);
-  const needVerify = /verify-slider|security|web\\/user/i.test(location.href)
+  const needVerify = /verify-slider|security-check|\\/security(?:\\/|$)|\\/web\\/user/i.test(location.pathname)
     || /请完成安全验证|拖动滑块|点击按钮进行验证|访问异常|账号异常|扫码登录/.test(body);
   const chatBtn = document.querySelector(".btn-startchat, .op-btn-chat");
   return {
@@ -940,7 +954,7 @@ if (verifyState.chatBtnText.includes("立即沟通")) {
   await page.waitForTimeout(randDelay(2000, 3000));
 }
 
-if (await page.evaluate(() => /verify-slider|security/i.test(location.href) || /请完成安全验证|拖动滑块/.test(document.body?.innerText || ""))) {
+if (await page.evaluate(() => /verify-slider|security-check|\\/security(?:\\/|$)/i.test(location.pathname) || /请完成安全验证|拖动滑块/.test(document.body?.innerText || ""))) {
   await task.handOff();
   console.log("RESULT_JSON:" + JSON.stringify({
     status: "VERIFICATION_REQUIRED",
@@ -1268,7 +1282,7 @@ if (fetchMissing) {
     await page.waitForTimeout(randDelay(1400, 2100));
     const detail = await page.evaluate(() => {
       const body = (document.body?.innerText || "").slice(0, 500);
-      if (/verify-slider|security/i.test(location.href) || /请完成安全验证|拖动滑块|访问异常/.test(body)) {
+      if (/verify-slider|security-check|\\/security(?:\\/|$)/i.test(location.pathname) || /请完成安全验证|拖动滑块|访问异常/.test(body)) {
         return { blocked: true };
       }
       const addrEl = document.querySelector(".location-address, .job-address");

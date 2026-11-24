@@ -7,7 +7,7 @@ import { calculateBikePlusMetroMetrics } from "../src/commute.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { RESUME_ASSETS_DIR, db, getResumeImageMeta, getScrapeTelemetry, listKnownExternalIds, listPatrolRuns, normalizeCompanyRoot, recordPatrolRun, saveResumeImageMeta } from "../src/db.mjs";
-import { buildBossSearchUrl } from "../src/ego-worker.mjs";
+import { buildBossSearchUrl, isBossVerificationUrl } from "../src/ego-worker.mjs";
 import { compareSemver } from "../src/updater.mjs";
 
 test("RED zone: 银行/金融 + 实锤第三方背调 + HRBP 应命中 A轨_真实日期版", () => {
@@ -588,6 +588,14 @@ test("图片简历元数据存取：支持读取与恢复 meta.json", () => {
     if (prevMeta !== null) fs.writeFileSync(metaFile, prevMeta, "utf8");
     else { try { fs.unlinkSync(metaFile); } catch {} }
   }
+});
+
+test("Boss安全验证识别：不误判 job_detail?securityId=，准确拦截真实验证/登录页", () => {
+  const normalJobUrl = "https://www.zhipin.com/job_detail/740e2631cf032ab90nBy29W5GVVR.html?securityId=ea_knuAs84rMW-J1";
+  assert.equal(isBossVerificationUrl(normalJobUrl, "测试工程师 10-15K 立即沟通"), false);
+  assert.equal(isBossVerificationUrl("https://www.zhipin.com/web/user/?ka=header-login", "Boss直聘"), true);
+  assert.equal(isBossVerificationUrl("https://www.zhipin.com/web/common/security-check.html", "请完成安全验证"), true);
+  assert.equal(isBossVerificationUrl(normalJobUrl, "请完成安全验证 拖动滑块"), true);
 });
 
 
