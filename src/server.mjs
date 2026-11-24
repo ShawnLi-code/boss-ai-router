@@ -44,7 +44,7 @@ import {
   upsertJob,
 } from "./db.mjs";
 import { evaluateJobRisk, shouldTriggerWebSearch } from "./scoring.mjs";
-import { DEFAULT_TARGET_ROLES, evaluateJobEligibility, matchResumeToJob } from "./matcher.mjs";
+import { DEFAULT_TARGET_ROLES, evaluateJobEligibility, matchResumeToJob, pickGreetingByTemplateStyle } from "./matcher.mjs";
 import { searchCompaniesBatchIntel, searchCompanyBackgroundIntel } from "./websearch.mjs";
 import { isLlmConfigured, refineMatchWithLlm } from "./llm.mjs";
 import {
@@ -1546,7 +1546,12 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
         });
       }
 
-      const greetingText = String(body.greetingText ?? job.custom_greeting ?? "").trim();
+      const greetingText = String(
+        body.greetingText
+          || (body.templateStyle ? pickGreetingByTemplateStyle(job, body.templateStyle) : "")
+          || job.custom_greeting
+          || ""
+      ).trim();
       const autoSend = body.autoSend !== undefined ? Boolean(body.autoSend) : (settings.deliver_auto_send !== "false");
       const sendImageResume = onlySendImage
         ? true

@@ -33,6 +33,10 @@ const state = {
   followupMessages: [],
   followupCanSendImg: false,
   followupAdvice: null,
+  batchMode: false,
+  batchSelectedIds: new Set(),
+  batchRunning: false,
+  batchAbortRequested: false,
 };
 
 const els = {
@@ -125,6 +129,17 @@ const els = {
   followupSendImgChk: document.getElementById("followup-send-img-chk"),
   followupCopyBtn: document.getElementById("followup-copy-btn"),
   followupSendBtn: document.getElementById("followup-send-btn"),
+  btnToggleBatch: document.getElementById("btn-toggle-batch"),
+  batchDeliverBar: document.getElementById("batch-deliver-bar"),
+  btnBatchSelectNew: document.getElementById("btn-batch-select-new"),
+  btnBatchClear: document.getElementById("btn-batch-clear"),
+  batchSelectedCount: document.getElementById("batch-selected-count"),
+  batchTemplateStyle: document.getElementById("batch-template-style"),
+  batchProfileSelect: document.getElementById("batch-profile-select"),
+  batchSendImgChk: document.getElementById("batch-send-img-chk"),
+  btnBatchDeliver: document.getElementById("btn-batch-deliver"),
+  btnBatchStop: document.getElementById("btn-batch-stop"),
+  batchProgressText: document.getElementById("batch-progress-text"),
   themeToggleBtn: document.getElementById("theme-toggle-btn"),
   resumeEditModal: document.getElementById("resume-edit-modal"),
   resumeEditTitle: document.getElementById("resume-edit-modal-title"),
@@ -335,11 +350,45 @@ async function loadEgoProfiles() {
   renderProfileSelectors();
 }
 
+function updateBatchBarUi() {
+  if (!els.batchDeliverBar || !els.btnToggleBatch) return;
+  els.batchDeliverBar.hidden = !state.batchMode;
+  els.btnToggleBatch.classList.toggle("active", state.batchMode);
+  els.btnToggleBatch.textContent = state.batchMode ? "✅ 退出多选" : "☑️ 多选投递";
+
+  const count = state.batchSelectedIds.size;
+  if (els.batchSelectedCount) els.batchSelectedCount.textContent = String(count);
+  if (els.btnBatchDeliver) {
+    els.btnBatchDeliver.disabled = state.batchRunning || count === 0;
+    els.btnBatchDeliver.textContent = state.batchRunning
+      ? "⏳ 批量投递中..."
+      : `🚀 批量一键打招呼 (${count})`;
+  }
+  if (els.btnBatchStop) els.btnBatchStop.hidden = !state.batchRunning;
+
+  if (els.batchProfileSelect && state.data) {
+    const tracks = state.data.tracks || [];
+    const pool = state.egoProfiles.length ? state.egoProfiles : tracks.map((t) => ({ id: t.profile_id, name: t.profile_name }));
+    const prev = els.batchProfileSelect.value || "auto";
+    els.batchProfileSelect.innerHTML = `<option value="auto">🤖 智能分流防撞车</option>` + pool.map((p) => {
+      const tr = tracks.find((t) => t.profile_id === p.id);
+      const qTxt = tr ? ` (${tr.today_delivered}/${tr.daily_limit}${tr.breaker_active ? " 暂停" : ""})` : "";
+      return `<option value="${esc(p.id)}" ${prev === p.id ? "selected" : ""}>${esc(p.name)}${esc(qTxt)}</option>`;
+    }).join("");
+  }
+  if (els.batchSendImgChk && state.data) {
+    const hasImg = Boolean(state.data.resume_image?.exists);
+    els.batchSendImgChk.disabled = !hasImg;
+    if (!hasImg) els.batchSendImgChk.checked = false;
+  }
+}
+
 function renderAll() {
   if (!state.data) return;
   renderSidebarSummary();
   renderWatchlistChips();
   renderProfileSelectors();
+  updateBatchBarUi();
   renderJobList();
   renderInspector();
   renderResumes();
@@ -546,10 +595,11 @@ function renderJobList() {
   els.jobListPane.innerHTML = jobs
     .map((j) => {
       const selected = j.id === state.selectedJobId;
+      const checked = state.batchSelectedIds.has(j.id);
       const adv = j.apply_advice || j.match?.apply_advice || "REVISE_FIRST";
       const salaryIdeal = j.filter_status !== "FILTERED" && Boolean(j.match?.salary_fit?.highlighted);
       const locSub = j.area_district || (j.work_address ? j.work_address.slice(0, 14) : "");
-      return `
+      const rowBtn = `
         <button type="button" class="job-row ${salaryIdeal ? "job-row-salary-ideal" : ""}" role="option" aria-selected="${selected}" data-select-job="${j.id}">
           <div class="job-row-top">
             <span class="job-row-title">${esc(j.job_title)}</span>
@@ -564,8 +614,26 @@ function renderJobList() {
           </div>
         </button>
       `;
+      if (!state.batchMode) return rowBtn;
+      return `
+        <div class="job-row-wrap">
+          <label class="batch-job-chk-wrap" title="勾选加入批量投递">
+            <input type="checkbox" class="batch-job-chk" data-batch-chk="${j.id}" ${checked ? "checked" : ""}>
+          </label>
+          ${rowBtn}
+        </div>
+      `;
     })
     .join("");
+
+  els.jobListPane.querySelectorAll("[data-batch-chk]").forEach((chk) => {
+    chk.addEventListener("change", () => {
+      const id = Number(chk.dataset.batchChk);
+      if (chk.checked) state.batchSelectedIds.add(id);
+      else state.batchSelectedIds.delete(id);
+      updateBatchBarUi();
+    });
+  });
 
   els.jobListPane.querySelectorAll("[data-select-job]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -2175,6 +2243,139 @@ els.followupSendBtn?.addEventListener("click", async () => {
   } finally {
     els.followupSendBtn.disabled = false;
     setWorkerBusy(false);
+  }
+});
+
+// ============================================================================
+// Batch Multi-Select & Template-Style One-Click Delivery
+// ============================================================================
+els.btnToggleBatch?.addEventListener("click", () => {
+  if (state.batchRunning) return;
+  state.batchMode = !state.batchMode;
+  updateBatchBarUi();
+  renderJobList();
+});
+
+els.btnBatchSelectNew?.addEventListener("click", () => {
+  const visible = getFilteredSortedJobs();
+  for (const j of visible) {
+    if (j.filter_status === "FILTERED" || j.blacklisted) continue;
+    if (CONTACTED_STATUSES.has(j.status) || (j.company_history || []).length > 0) continue;
+    state.batchSelectedIds.add(j.id);
+  }
+  updateBatchBarUi();
+  renderJobList();
+});
+
+els.btnBatchClear?.addEventListener("click", () => {
+  state.batchSelectedIds.clear();
+  updateBatchBarUi();
+  renderJobList();
+});
+
+els.btnBatchStop?.addEventListener("click", () => {
+  state.batchAbortRequested = true;
+  if (els.batchProgressText) {
+    els.batchProgressText.hidden = false;
+    els.batchProgressText.textContent = "⏹️ 正在停止批量投递，当前条完成后将中止队列...";
+  }
+});
+
+els.btnBatchDeliver?.addEventListener("click", async () => {
+  if (state.batchRunning || state.batchSelectedIds.size === 0) return;
+  const visibleMap = new Map((state.data?.jobs || []).map((j) => [j.id, j]));
+  const targets = [...state.batchSelectedIds].map((id) => visibleMap.get(id)).filter(Boolean);
+  if (targets.length === 0) return;
+
+  const templateStyle = els.batchTemplateStyle?.value || "auto";
+  const styleLabel = els.batchTemplateStyle?.selectedOptions?.[0]?.textContent || templateStyle;
+  const chosenProfile = els.batchProfileSelect?.value || "auto";
+  const sendImageResume = Boolean(els.batchSendImgChk?.checked && state.data?.resume_image?.exists);
+
+  if (!confirm(`确认按「${styleLabel}」批量打招呼这 ${targets.length} 个岗位吗？\n\n系统会自动低速间隔 4.5~7.5 秒发送，遇到已沟通过/黑名单/跨号撞车公司将自动跳过，遇到验证立即暂停。`)) {
+    return;
+  }
+
+  state.batchRunning = true;
+  state.batchAbortRequested = false;
+  updateBatchBarUi();
+  if (els.batchProgressText) els.batchProgressText.hidden = false;
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let okCount = 0;
+  let skippedCount = 0;
+  let failedCount = 0;
+  let verifyHalted = false;
+
+  try {
+    const tracks = state.data?.tracks || [];
+    const profilePool = state.egoProfiles.length ? state.egoProfiles : tracks.map((t) => ({ id: t.profile_id, name: t.profile_name }));
+
+    for (let i = 0; i < targets.length; i++) {
+      if (state.batchAbortRequested) break;
+      const latestJob = (state.data?.jobs || []).find((x) => x.id === targets[i].id) || targets[i];
+      const stepLabel = `[${i + 1}/${targets.length}] ${latestJob.company_name} · ${latestJob.job_title}`;
+
+      if (latestJob.blacklisted || CONTACTED_STATUSES.has(latestJob.status) || (latestJob.company_history || []).length > 0) {
+        skippedCount++;
+        state.batchSelectedIds.delete(latestJob.id);
+        if (els.batchProgressText) els.batchProgressText.textContent = `⏭️ ${stepLabel}：黑名单或此前已沟通，已自动防重跳过`;
+        continue;
+      }
+
+      const profileId = chosenProfile === "auto" ? pickBestProfileForJob(latestJob, tracks, profilePool) : chosenProfile;
+      setWorkerBusy(true, `批量打招呼 ${stepLabel} (${profileId})`);
+      if (els.batchProgressText) els.batchProgressText.textContent = `🚀 正在投递 ${stepLabel}（话术：${styleLabel}，账号：${profileId}）...`;
+
+      try {
+        const res = await api(`/api/jobs/${latestJob.id}/deliver`, {
+          method: "POST",
+          body: JSON.stringify({
+            profileId,
+            templateStyle,
+            autoSend: true,
+            sendImageResume,
+          }),
+        });
+        if (res.status === "VERIFICATION_REQUIRED") {
+          verifyHalted = true;
+          showVerifyBanner(res);
+          if (els.batchProgressText) els.batchProgressText.textContent = `⚠️ ${stepLabel} 触发验证，已停止队列保护账号`;
+          break;
+        }
+        okCount++;
+        state.batchSelectedIds.delete(latestJob.id);
+        els.liveLogLatest.textContent = `${stepLabel}：${res.delivery?.message || "已发出"}`;
+        await refreshState();
+      } catch (err) {
+        if (/防重复|防撞车|黑名单/.test(err.message)) {
+          skippedCount++;
+          state.batchSelectedIds.delete(latestJob.id);
+        } else {
+          failedCount++;
+          if (els.batchProgressText) els.batchProgressText.textContent = `❌ ${stepLabel} 失败：${err.message}`;
+          if (/防封熔断|安全上限/.test(err.message)) break;
+        }
+      }
+
+      if (i < targets.length - 1 && !state.batchAbortRequested && !verifyHalted) {
+        const waitMs = 4500 + Math.floor(Math.random() * 3000);
+        if (els.batchProgressText) els.batchProgressText.textContent = `⏳ 已完成 ${okCount} 条，防风控冷却 ${(waitMs / 1000).toFixed(1)}s 后继续下一条...`;
+        await sleep(waitMs);
+      }
+    }
+  } finally {
+    state.batchRunning = false;
+    setWorkerBusy(false);
+    await refreshState();
+    const summary = verifyHalted
+      ? `⚠️ 批量队列因安全验证已暂停：成功 ${okCount} 条、防重跳过 ${skippedCount} 条`
+      : state.batchAbortRequested
+        ? `⏹️ 已手动停止批量投递：成功 ${okCount} 条、跳过 ${skippedCount} 条、失败 ${failedCount} 条`
+        : `✅ 批量投递完成：成功 ${okCount} 条、防重/黑名单跳过 ${skippedCount} 条、失败 ${failedCount} 条`;
+    if (els.batchProgressText) els.batchProgressText.textContent = summary;
+    els.liveLogLatest.textContent = summary;
+    alert(summary);
   }
 });
 

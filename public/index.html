@@ -179,8 +179,41 @@
               <option value="commute">按通勤最近</option>
               <option value="recent">按最新抓取</option>
             </select>
+            <button type="button" id="btn-toggle-batch" class="btn btn-secondary btn-xs">☑️ 多选投递</button>
             <button type="button" id="btn-purge-filtered" class="btn btn-ghost btn-xs" hidden>清空杂岗</button>
           </div>
+        </div>
+
+        <div id="batch-deliver-bar" class="batch-bar" hidden>
+          <div class="batch-bar-left">
+            <button type="button" id="btn-batch-select-new" class="btn btn-secondary btn-xs">全选待沟通</button>
+            <button type="button" id="btn-batch-clear" class="btn btn-ghost btn-xs">清空</button>
+            <span class="meta-pill">已选 <strong id="batch-selected-count">0</strong> 个</span>
+          </div>
+          <div class="batch-bar-right">
+            <label class="inline-ctrl">
+              <span>话术类型</span>
+              <select id="batch-template-style" class="input-compact">
+                <option value="auto">🎯 智能推荐（自动匹配岗位/HR）</option>
+                <option value="direct">🚀 高匹配直投（突出亮点+到岗）</option>
+                <option value="tech">🛠️ 突出技术成果（自动化/压测/排障）</option>
+                <option value="bridge">🤝 精炼礼貌破冰（温和询问发简历）</option>
+              </select>
+            </label>
+            <label class="inline-ctrl">
+              <span>账号</span>
+              <select id="batch-profile-select" class="input-compact">
+                <option value="auto">🤖 智能分流防撞车</option>
+              </select>
+            </label>
+            <label class="check-label" for="batch-send-img-chk">
+              <input type="checkbox" id="batch-send-img-chk" checked>
+              <span>顺带发图片简历</span>
+            </label>
+            <button type="button" id="btn-batch-deliver" class="btn btn-boss btn-sm" disabled>🚀 批量一键打招呼 (0)</button>
+            <button type="button" id="btn-batch-stop" class="btn btn-ghost btn-xs" hidden>⏹️ 停止</button>
+          </div>
+          <div id="batch-progress-text" class="batch-progress-note" hidden></div>
         </div>
 
         <div class="split-workspace">

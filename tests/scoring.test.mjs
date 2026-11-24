@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { evaluateJobRisk, shouldTriggerWebSearch } from "../src/scoring.mjs";
 import { analyzeSearchSnippets } from "../src/websearch.mjs";
-import { DEFAULT_TARGET_ROLES, evaluateJobEligibility, evaluateSalaryFit, factGuardCheck, matchResumeToJob, parseSalaryRangeK } from "../src/matcher.mjs";
+import { DEFAULT_TARGET_ROLES, evaluateJobEligibility, evaluateSalaryFit, factGuardCheck, matchResumeToJob, parseSalaryRangeK, pickGreetingByTemplateStyle } from "../src/matcher.mjs";
 import { calculateBikePlusMetroMetrics } from "../src/commute.mjs";
 import fs from "node:fs";
 import path from "node:path";
@@ -683,6 +683,23 @@ test("连续对话智能回复建议：识别年限质疑/索要简历/邀约面
   });
   assert.equal(iv.intent, "INTERVIEW_INVITE");
   assert.equal(iv.templates.length, 3);
+});
+
+test("批量投递话术风格选择：支持按 auto/direct/tech/bridge 精准取出对应话术", () => {
+  const mockJob = {
+    custom_greeting: "默认话术",
+    match: {
+      greeting_templates: [
+        { key: "direct", label: "高匹配直投", text: "高匹配直投话术内容" },
+        { key: "tech", label: "突出技术成果", text: "突出技术成果话术内容" },
+        { key: "bridge", label: "精炼礼貌破冰", text: "精炼礼貌破冰话术内容" },
+      ],
+    },
+  };
+  assert.equal(pickGreetingByTemplateStyle(mockJob, "auto"), "默认话术");
+  assert.equal(pickGreetingByTemplateStyle(mockJob, "direct"), "高匹配直投话术内容");
+  assert.equal(pickGreetingByTemplateStyle(mockJob, "tech"), "突出技术成果话术内容");
+  assert.equal(pickGreetingByTemplateStyle(mockJob, "bridge"), "精炼礼貌破冰话术内容");
 });
 
 

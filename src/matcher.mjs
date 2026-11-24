@@ -836,3 +836,16 @@ export function buildCustomGreeting(job, resume, matchedKeywords = []) {
   const recruiter = String(job.recruiter_title || "").trim();
   return /总监|经理|CTO|老板|创始人|CEO|Lead/i.test(recruiter) ? templates[1].text : templates[0].text;
 }
+
+/**
+ * 根据话术风格标识（auto / direct / tech / bridge / llm）从岗位预设话术中选取对应文案。
+ */
+export function pickGreetingByTemplateStyle(job = {}, templateStyle = "auto") {
+  const style = String(templateStyle || "auto").trim();
+  const templates = Array.isArray(job.match?.greeting_templates) ? job.match.greeting_templates : [];
+  if (style && style !== "auto") {
+    const found = templates.find((t) => t.key === style);
+    if (found?.text) return found.text;
+  }
+  return job.custom_greeting || templates[0]?.text || "";
+}
