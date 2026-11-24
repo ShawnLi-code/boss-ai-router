@@ -891,6 +891,16 @@ export function addDeliveryLog(entry) {
   return db.prepare("SELECT * FROM delivery_logs WHERE id = ?").get(info.lastInsertRowid);
 }
 
+export function updateDeliveryLogSnapshot(id, patch = {}) {
+  db.prepare(`
+    UPDATE delivery_logs
+    SET greeting_text = COALESCE(?, greeting_text),
+        detail = COALESCE(?, detail)
+    WHERE id = ?
+  `).run(patch.greeting_text ?? null, patch.detail ?? null, id);
+  return db.prepare("SELECT * FROM delivery_logs WHERE id = ?").get(id);
+}
+
 export function hasJobExternalId(externalId) {
   if (!externalId) return false;
   return Boolean(db.prepare("SELECT 1 FROM jobs WHERE external_id = ?").get(externalId));

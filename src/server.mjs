@@ -39,6 +39,7 @@ import {
   todayStr,
   tripProfileBreaker,
   updateAccountTrack,
+  updateDeliveryLogSnapshot,
   updateJobRouting,
   upsertJob,
 } from "./db.mjs";
@@ -1263,6 +1264,7 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
       const allJobs = listJobs();
       const existingLogs = listDeliveryLogs(400);
       let syncedCount = 0;
+      let updatedCount = 0;
       const matchedCompanies = [];
 
       for (const pid of targetProfiles) {
@@ -1272,7 +1274,7 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
           onLog: (m) => logEvent(m),
         });
         if (resSync.status === "VERIFICATION_REQUIRED") {
-          return sendJson(resSync.taskSpaceId ? 202 : 200, { ...resSync, state: buildStatePayload() });
+          return sendJson(res, resSync.taskSpaceId ? 202 : 200, { ...resSync, syncedCount, updatedCount, state: buildStatePayload() });
         }
         const tTrack = tracks.find((t) => t.profile_id === pid) || tracks[0];
         for (const ch of resSync.chats || []) {
@@ -1294,15 +1296,25 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
             });
           }
           for (const mj of matchedJobs) {
-            const alreadyLogged = existingLogs.some((l) => l.job_id === mj.id && l.status === "DELIVERED");
+            const existingRow = existingLogs.find((l) => l.job_id === mj.id && l.status === "DELIVERED");
             const nextStatus = ch.hr_replied ? "REPLIED" : "DELIVERED";
-            if (mj.status === "NEW" || mj.status === "PREPARED" || (ch.hr_replied && mj.status === "DELIVERED")) {
+            const prevMsgs = Array.isArray(mj.chat_messages) ? [...mj.chat_messages] : [];
+            const lastText = String(ch.last_msg || "").trim();
+            const hasLastInThread = lastText && prevMsgs.some((m) => m.text === lastText);
+            const nextMsgs = lastText && !hasLastInThread
+              ? [...prevMsgs, { sender: ch.hr_replied ? "HR" : "ME", time: "最新", text: lastText }]
+              : prevMsgs;
+
+            const statusChanged = mj.status === "NEW" || mj.status === "PREPARED" || (ch.hr_replied && mj.status === "DELIVERED");
+            if (statusChanged || nextMsgs.length !== prevMsgs.length) {
               updateJobRouting(mj.id, {
                 assigned_profile_id: pid,
-                status: nextStatus,
+                status: statusChanged ? nextStatus : undefined,
+                chat_messages: nextMsgs.length !== prevMsgs.length ? nextMsgs : undefined,
               });
             }
-            if (!alreadyLogged) {
+            const detailText = `从 Boss 历史聊天同步：${ch.recruiter_name || "HR"}${ch.hr_replied ? "（HR已回复）" : ""}${lastText ? ` · 最近消息「${lastText.slice(0, 40)}」` : ""}`;
+            if (!existingRow) {
               const logRow = addDeliveryLog({
                 job_id: mj.id,
                 company_name: mj.company_name,
@@ -1310,22 +1322,29 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
                 track_key: tTrack?.track_key || "A",
                 profile_id: pid,
                 action: "BOSS_HISTORY_SYNC",
-                greeting_text: ch.last_msg || "",
+                greeting_text: lastText,
                 text_sent: true,
                 image_sent: false,
                 image_status: mj.tailored_resume?.image_delivery || "NONE",
                 status: "DELIVERED",
-                detail: `从 Boss 历史聊天同步：${ch.recruiter_name || "HR"}${ch.hr_replied ? "（HR已回复）" : ""}${ch.last_msg ? ` · 最近消息「${ch.last_msg.slice(0, 40)}」` : ""}`,
+                detail: detailText,
               });
               existingLogs.unshift(logRow);
               syncedCount++;
+              matchedCompanies.push(`${mj.company_name}·${mj.job_title}`);
+            } else if (existingRow.greeting_text !== lastText || existingRow.detail !== detailText || statusChanged) {
+              updateDeliveryLogSnapshot(existingRow.id, {
+                greeting_text: lastText || existingRow.greeting_text,
+                detail: detailText,
+              });
+              updatedCount++;
               matchedCompanies.push(`${mj.company_name}·${mj.job_title}`);
             }
           }
         }
       }
-      logEvent(`🔄 历史沟通同步完成：新增识别 ${syncedCount} 个已沟通过的岗位`);
-      return sendJson(res, 200, { ok: true, syncedCount, matchedCompanies, state: buildStatePayload() });
+      logEvent(`🔄 同步完成：新增 ${syncedCount} 家、更新 ${updatedCount} 条最新对话/回复状态`);
+      return sendJson(res, 200, { ok: true, syncedCount, updatedCount, matchedCompanies: [...new Set(matchedCompanies)], state: buildStatePayload() });
     }
 
     const chatSyncMatch = pathname.match(/^\/api\/jobs\/(\d+)\/chat\/sync$/);

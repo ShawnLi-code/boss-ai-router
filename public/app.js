@@ -1739,13 +1739,16 @@ function renderSettings() {
 }
 
 function deliveryLogBadgesHtml(l) {
-  const txtBadge = l.action === "BOSS_ALREADY_CONTACTED" || l.action === "BOSS_HISTORY_SYNC"
-    ? `<span class="zone-tag zone-GREEN">🛡️ Boss历史已沟通</span>`
-    : l.text_sent || l.status === "DELIVERED"
-      ? `<span class="zone-tag zone-GREEN">📝 文字招呼：已发</span>`
-      : l.status === "PREPARED"
-        ? `<span class="zone-tag zone-YELLOW">✋ 预填待发</span>`
-        : `<span class="zone-tag zone-RED">⚠️ 未发出/待验证</span>`;
+  const hrReplied = l.current_job_status === "REPLIED" || String(l.detail || "").includes("HR已回复");
+  const txtBadge = hrReplied
+    ? `<span class="zone-tag zone-GREEN">📩 HR已回复</span>`
+    : l.action === "BOSS_ALREADY_CONTACTED" || l.action === "BOSS_HISTORY_SYNC"
+      ? `<span class="zone-tag zone-GREEN">🛡️ Boss历史已沟通</span>`
+      : l.text_sent || l.status === "DELIVERED"
+        ? `<span class="zone-tag zone-GREEN">📝 文字招呼：已发</span>`
+        : l.status === "PREPARED"
+          ? `<span class="zone-tag zone-YELLOW">✋ 预填待发</span>`
+          : `<span class="zone-tag zone-RED">⚠️ 未发出/待验证</span>`;
 
   const imgState = l.image_sent ? "SENT" : (l.image_status || l.job_image_delivery || "NONE");
   const imgBadge = imgState === "SENT"
@@ -1824,6 +1827,8 @@ function renderDeliveries() {
     .map((l) => {
       const imgDone = l.image_sent || l.job_image_delivery === "SENT";
       const canSendImg = Boolean(l.job_id && hasResumeImg && !imgDone && l.status === "DELIVERED");
+      const hrReplied = l.current_job_status === "REPLIED" || String(l.detail || "").includes("HR已回复");
+      const quoteLabel = hrReplied ? "📩 对方最新回复：" : "📤 我方发出：";
       return `
         <article class="delivery-card">
           <div class="delivery-card-head">
@@ -1836,7 +1841,7 @@ function renderDeliveries() {
               ${deliveryLogBadgesHtml(l)}
             </div>
           </div>
-          ${l.greeting_text ? `<div class="delivery-quote">${esc(l.greeting_text)}</div>` : ""}
+          ${l.greeting_text ? `<div class="delivery-quote"><strong style="color:${hrReplied ? "var(--green-fg)" : "var(--accent-teal)"};">${quoteLabel}</strong>${esc(l.greeting_text)}</div>` : ""}
           <div class="delivery-card-actions">
             <span class="muted" style="font-size:12px;">${esc(l.detail || "")}</span>
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
@@ -1937,15 +1942,17 @@ els.deliverySearchInput?.addEventListener("input", () => {
 });
 
 els.btnSyncBossChats?.addEventListener("click", async () => {
-  setWorkerBusy(true, "正在从 Boss 聊天列表同步历史已沟通公司...");
+  setWorkerBusy(true, "正在从 Boss 聊天列表同步最新对话与 HR 回复...");
   try {
     const res = await api("/api/deliveries/sync-boss", { method: "POST", body: JSON.stringify({}) });
     if (res.status === "VERIFICATION_REQUIRED") {
       showVerifyBanner(res);
     } else {
-      const msg = res.syncedCount > 0
-        ? `🔄 同步完成，新增识别 ${res.syncedCount} 条历史沟通记录（${(res.matchedCompanies || []).slice(0, 3).join("、")}）`
-        : "🔄 同步完成，暂无新的未记录历史沟通。";
+      const nNew = res.syncedCount || 0;
+      const nUpd = res.updatedCount || 0;
+      const msg = (nNew > 0 || nUpd > 0)
+        ? `🔄 同步完成：新增 ${nNew} 条、更新 ${nUpd} 条最新回复/状态（${(res.matchedCompanies || []).slice(0, 4).join("、")}）`
+        : "🔄 同步完成，已是最新状态；如需看完整多轮聊天记录，点卡片上的「💬 连续沟通/回复模板」即可自动拉取。";
       els.liveLogLatest.textContent = msg;
       alert(msg);
     }
@@ -2037,6 +2044,12 @@ async function openFollowupModal(jobId, profileId) {
   renderFollowupModalBody();
   if (!els.followupModal.open) els.followupModal.showModal();
 
+  // 若本地只有 0~1 条记录（例如尚未拉取完整多轮对话），自动同步一次真实 Boss 对话记录
+  if (state.followupMessages.length < 2) {
+    await syncFollowupFromBoss({ silentNotFound: true });
+    return;
+  }
+
   try {
     const res = await api(`/api/jobs/${jobId}/chat/suggest`, {
       method: "POST",
@@ -2053,13 +2066,10 @@ async function openFollowupModal(jobId, profileId) {
   }
 }
 
-els.followupReplyTextarea?.addEventListener("input", () => {
-  els.followupReplyLen.textContent = String(els.followupReplyTextarea.value.length);
-});
-
-els.followupSyncBtn?.addEventListener("click", async () => {
+async function syncFollowupFromBoss({ silentNotFound = false } = {}) {
   if (!state.followupJobId) return;
   els.followupSyncBtn.disabled = true;
+  els.followupStrategyTip.textContent = "正在自动拉取 Boss 实时完整对话并匹配回复模板...";
   setWorkerBusy(true, "正在从 Boss 拉取真实对话记录并对齐回复模板...");
   try {
     const res = await api(`/api/jobs/${state.followupJobId}/chat/sync`, {
@@ -2070,7 +2080,7 @@ els.followupSyncBtn?.addEventListener("click", async () => {
       showVerifyBanner(res);
       return;
     }
-    if (res.chatStatus === "NOT_FOUND" && res.message) {
+    if (!silentNotFound && res.chatStatus === "NOT_FOUND" && res.message) {
       alert(res.message);
     }
     state.followupMessages = res.messages || [];
@@ -2086,12 +2096,19 @@ els.followupSyncBtn?.addEventListener("click", async () => {
     await refreshState();
     renderFollowupModalBody();
   } catch (err) {
-    alert(err.message);
+    if (!silentNotFound) alert(err.message);
+    else els.followupStrategyTip.textContent = `拉取实时对话失败：${err.message}`;
   } finally {
     els.followupSyncBtn.disabled = false;
     setWorkerBusy(false);
   }
+}
+
+els.followupReplyTextarea?.addEventListener("input", () => {
+  els.followupReplyLen.textContent = String(els.followupReplyTextarea.value.length);
 });
+
+els.followupSyncBtn?.addEventListener("click", () => syncFollowupFromBoss({ silentNotFound: false }));
 
 els.followupRecalcBtn?.addEventListener("click", async () => {
   if (!state.followupJobId) return;
