@@ -993,6 +993,16 @@ if (hasInput && shouldSendText) {
 }
 
 if (shouldSendImg) {
+  const canOpenChat = await page.evaluate(() => {
+    if (!location.pathname.includes("/job_detail/")) return false;
+    const btn = document.querySelector(".btn-startchat, .op-btn-chat");
+    return Boolean(btn && (btn.innerText || "").includes("继续沟通"));
+  }).catch(() => false);
+  if (canOpenChat) {
+    await page.click(".btn-startchat, .op-btn-chat", { label: "enter full chat for image" }).catch(() => {});
+    await page.waitForTimeout(randDelay(2000, 2800));
+  }
+
   // 检测 Boss 聊天框顶部的「发送图片」控件是否可用
   const imgBtnState = await page.evaluate(() => {
     const wrap = document.querySelector(".btn-sendimg, [aria-label='发送图片']");
@@ -1051,6 +1061,7 @@ if (shouldSendImg) {
 }
 
 if (shouldAutoSend && (textSent || imageSent)) {
+  const finalUrl = await page.url().catch(() => "");
   await task.finish({ keep: [] });
   const status = imageSent
     ? "SENT_WITH_IMAGE"
@@ -1068,13 +1079,14 @@ if (shouldAutoSend && (textSent || imageSent)) {
     imageSent,
     imageBlockedReason,
     taskSpaceId: task.spaceId,
-    url: await page.url(),
+    url: finalUrl,
     message,
   }));
   process.exit(0);
 }
 
 // 半自动或仅补发图片受阻时：保留标签页移交给用户查看处理
+const handoffUrl = await page.url().catch(() => "");
 await task.handOff();
 console.log("RESULT_JSON:" + JSON.stringify({
   status: "PREPARED_HANDOFF",
@@ -1082,7 +1094,7 @@ console.log("RESULT_JSON:" + JSON.stringify({
   imageSent,
   imageBlockedReason,
   taskSpaceId: task.spaceId,
-  url: await page.url(),
+  url: handoffUrl,
   hasInput,
   chatBtnText: verifyState.chatBtnText,
   message: onlySendImage && imageBlockedReason
