@@ -52,8 +52,10 @@ import {
   getCurrentVersion,
   launchUpdateInstaller,
 } from "./updater.mjs";
+import { analyzeConversationAndSuggestReplies, generateContextualReplies } from "./reply-advisor.mjs";
 import {
   enrichJobDetailsAndCommuteViaEgo,
+  fetchBossConversationMessages,
   finishEgoSpace,
   generateResumePdfViaEgo,
   getActiveLock,
@@ -62,6 +64,7 @@ import {
   prepareBossDelivery,
   renderResumeImageViaEgo,
   scrapeBossJobs,
+  sendBossReplyMessage,
   syncBossContactedChats,
   syncResumeFromBoss,
 } from "./ego-worker.mjs";
@@ -1323,6 +1326,144 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
       }
       logEvent(`🔄 历史沟通同步完成：新增识别 ${syncedCount} 个已沟通过的岗位`);
       return sendJson(res, 200, { ok: true, syncedCount, matchedCompanies, state: buildStatePayload() });
+    }
+
+    const chatSyncMatch = pathname.match(/^\/api\/jobs\/(\d+)\/chat\/sync$/);
+    if (req.method === "POST" && chatSyncMatch) {
+      const job = getJob(Number(chatSyncMatch[1]));
+      if (!job) return sendJson(res, 404, { error: "岗位不存在" });
+      const body = await readBody(req).catch(() => ({}));
+      const tracks = getAccountTracks();
+      const settings = getSettings();
+      const profileId = body.profileId || job.assigned_profile_id || job.source_profile_id || tracks[0]?.profile_id || "Profile 1";
+      const trackKey = tracks.find((t) => t.profile_id === profileId)?.track_key || job.manual_track || settings.primary_resume_track || "A";
+      const resume = getResumeByTrack(trackKey) || getPrimaryResume();
+
+      const chatRes = await fetchBossConversationMessages({
+        profileId,
+        companyName: job.company_name,
+        jobTitle: job.job_title,
+        externalId: job.external_id,
+        onLog: (m) => logEvent(m),
+      });
+      if (chatRes.status === "VERIFICATION_REQUIRED") {
+        return sendJson(202, { ...chatRes, state: buildStatePayload() });
+      }
+      const messages = chatRes.status === "OK" && chatRes.messages?.length ? chatRes.messages : (job.chat_messages || []);
+      const hasHrReply = messages.some((m) => m.sender === "HR");
+      const nextStatus = hasHrReply && ["NEW", "PREPARED", "DELIVERED"].includes(job.status) ? "REPLIED" : undefined;
+      const updatedJob = updateJobRouting(job.id, {
+        assigned_profile_id: profileId,
+        status: nextStatus,
+        chat_messages: messages,
+      });
+      const advice = await generateContextualReplies({
+        job: updatedJob,
+        resume,
+        messages,
+        customHint: body.customHint || "",
+        settings,
+      });
+      return sendJson(200, {
+        ok: true,
+        chatStatus: chatRes.status,
+        message: chatRes.message || "",
+        messages,
+        canSendImage: Boolean(chatRes.canSendImage),
+        advice,
+        state: buildStatePayload(),
+      });
+    }
+
+    const chatSuggestMatch = pathname.match(/^\/api\/jobs\/(\d+)\/chat\/suggest$/);
+    if (req.method === "POST" && chatSuggestMatch) {
+      const job = getJob(Number(chatSuggestMatch[1]));
+      if (!job) return sendJson(res, 404, { error: "岗位不存在" });
+      const body = await readBody(req).catch(() => ({}));
+      const tracks = getAccountTracks();
+      const settings = getSettings();
+      const profileId = body.profileId || job.assigned_profile_id || job.source_profile_id || tracks[0]?.profile_id || "Profile 1";
+      const trackKey = tracks.find((t) => t.profile_id === profileId)?.track_key || job.manual_track || settings.primary_resume_track || "A";
+      const resume = getResumeByTrack(trackKey) || getPrimaryResume();
+      const messages = Array.isArray(body.messages) ? body.messages : (job.chat_messages || []);
+      const advice = await generateContextualReplies({
+        job,
+        resume,
+        messages,
+        customHint: body.customHint || "",
+        settings,
+      });
+      return sendJson(200, { ok: true, advice });
+    }
+
+    const chatSendMatch = pathname.match(/^\/api\/jobs\/(\d+)\/chat\/send$/);
+    if (req.method === "POST" && chatSendMatch) {
+      const job = getJob(Number(chatSendMatch[1]));
+      if (!job) return sendJson(res, 404, { error: "岗位不存在" });
+      const body = await readBody(req);
+      const replyText = String(body.replyText || "").trim();
+      const sendImageResume = Boolean(body.sendImageResume);
+      if (!replyText && !sendImageResume) {
+        return sendJson(400, { error: "请先输入回复内容或勾选发送图片简历" });
+      }
+      const tracks = getAccountTracks();
+      const settings = getSettings();
+      const profileId = body.profileId || job.assigned_profile_id || job.source_profile_id || tracks[0]?.profile_id || "Profile 1";
+      const trackKey = tracks.find((t) => t.profile_id === profileId)?.track_key || job.manual_track || settings.primary_resume_track || "A";
+      const resumeMeta = getResumeImageMeta();
+
+      const sendRes = await sendBossReplyMessage({
+        profileId,
+        companyName: job.company_name,
+        jobTitle: job.job_title,
+        externalId: job.external_id,
+        replyText,
+        sendImageResume,
+        imagePath: resumeMeta.exists ? resumeMeta.filePath : "",
+        onLog: (m) => logEvent(m),
+      });
+      if (sendRes.status === "VERIFICATION_REQUIRED") {
+        return sendJson(202, { ...sendRes, state: buildStatePayload() });
+      }
+
+      const prevMsgs = Array.isArray(job.chat_messages) ? [...job.chat_messages] : [];
+      if (sendRes.textSent && replyText) {
+        prevMsgs.push({
+          sender: "ME",
+          time: new Date().toTimeString().slice(0, 5),
+          text: replyText,
+        });
+      }
+      const prevTailored = job.tailored_resume || {};
+      const nextImgState = sendRes.imageSent ? "SENT" : (prevTailored.image_delivery || "NONE");
+      const updatedJob = updateJobRouting(job.id, {
+        assigned_profile_id: profileId,
+        status: job.status === "NEW" || job.status === "PREPARED" ? "DELIVERED" : job.status,
+        chat_messages: prevMsgs,
+        tailored_resume: {
+          ...prevTailored,
+          image_delivery: nextImgState,
+        },
+      });
+
+      addDeliveryLog({
+        job_id: job.id,
+        company_name: job.company_name,
+        job_title: job.job_title,
+        track_key: trackKey,
+        profile_id: profileId,
+        action: "FOLLOWUP_REPLY",
+        greeting_text: replyText,
+        text_sent: Boolean(sendRes.textSent),
+        image_sent: Boolean(sendRes.imageSent),
+        image_status: nextImgState,
+        status: (sendRes.textSent || sendRes.imageSent) ? "DELIVERED" : "PREPARED",
+        detail: sendRes.message || "已发送连续跟进回复",
+      });
+
+      const resume = getResumeByTrack(trackKey) || getPrimaryResume();
+      const advice = analyzeConversationAndSuggestReplies({ job: updatedJob, resume, messages: prevMsgs, settings });
+      return sendJson(200, { ok: true, delivery: sendRes, messages: prevMsgs, advice, state: buildStatePayload() });
     }
 
     const deliverMatch = pathname.match(/^\/api\/jobs\/(\d+)\/deliver$/);

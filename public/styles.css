@@ -950,6 +950,72 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   gap: 8px;
   flex-wrap: wrap;
 }
+.followup-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.15fr;
+  gap: 16px;
+}
+@media (max-width: 900px) {
+  .followup-grid { grid-template-columns: 1fr; }
+}
+.chat-thread-box {
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-line);
+  border-radius: 10px;
+  padding: 12px;
+  min-height: 240px;
+  max-height: 360px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.chat-bubble {
+  max-width: 88%;
+  padding: 8px 11px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.chat-bubble-me {
+  align-self: flex-end;
+  background: rgba(0, 190, 189, 0.14);
+  border: 1px solid rgba(0, 190, 189, 0.35);
+}
+.chat-bubble-hr {
+  align-self: flex-start;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-line);
+}
+.chat-bubble-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 3px;
+}
+.reply-tpl-card {
+  text-align: left;
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border-line);
+  background: var(--bg-canvas);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.reply-tpl-card:hover, .reply-tpl-card.active {
+  border-color: var(--accent-teal);
+  background: rgba(0, 190, 189, 0.08);
+}
+.reply-tpl-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+}
 
 .patrol-link {
   cursor: pointer;

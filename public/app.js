@@ -28,6 +28,11 @@ const state = {
   deliveryFilter: "ALL",
   deliveryProfile: "ALL",
   deliverySearch: "",
+  followupJobId: null,
+  followupProfileId: null,
+  followupMessages: [],
+  followupCanSendImg: false,
+  followupAdvice: null,
 };
 
 const els = {
@@ -105,6 +110,21 @@ const els = {
   deliveryProfileFilter: document.getElementById("delivery-profile-filter"),
   deliverySearchInput: document.getElementById("delivery-search-input"),
   btnSyncBossChats: document.getElementById("btn-sync-boss-chats"),
+  followupModal: document.getElementById("followup-modal"),
+  followupModalSub: document.getElementById("followup-modal-sub"),
+  followupSyncBtn: document.getElementById("followup-sync-btn"),
+  followupImgUnlockPill: document.getElementById("followup-img-unlock-pill"),
+  followupChatThread: document.getElementById("followup-chat-thread"),
+  followupManualHrInput: document.getElementById("followup-manual-hr-input"),
+  followupRecalcBtn: document.getElementById("followup-recalc-btn"),
+  followupIntentTitle: document.getElementById("followup-intent-title"),
+  followupStrategyTip: document.getElementById("followup-strategy-tip"),
+  followupTemplatesList: document.getElementById("followup-templates-list"),
+  followupReplyLen: document.getElementById("followup-reply-len"),
+  followupReplyTextarea: document.getElementById("followup-reply-textarea"),
+  followupSendImgChk: document.getElementById("followup-send-img-chk"),
+  followupCopyBtn: document.getElementById("followup-copy-btn"),
+  followupSendBtn: document.getElementById("followup-send-btn"),
   themeToggleBtn: document.getElementById("theme-toggle-btn"),
   resumeEditModal: document.getElementById("resume-edit-modal"),
   resumeEditTitle: document.getElementById("resume-edit-modal-title"),
@@ -641,6 +661,7 @@ async function renderInspector(fetchFresh = false) {
         ${adviceTagHtml(applyAdvice, job.match_score || 0)}
         ${commuteTagHtml(job)}
         ${zoneTagHtml(job.zone, job.risk_score)}
+        ${alreadyContacted ? `<button type="button" class="btn btn-primary btn-xs" id="insp-open-followup">💬 连续沟通/回复模板</button>` : ""}
         <button type="button" class="btn btn-secondary btn-xs" id="insp-open-page">在 Ego 打开</button>
         ${job.filter_status === "FILTERED" ? `<button type="button" class="btn btn-secondary btn-xs" id="insp-restore-btn">放回精选</button>` : `<button type="button" class="btn btn-ghost btn-xs" id="insp-filter-out-btn">移入杂岗</button>`}
         <button type="button" class="btn btn-ghost btn-xs" id="insp-ban-btn">拉黑公司</button>
@@ -942,6 +963,10 @@ async function renderInspector(fetchFresh = false) {
     });
     await refreshState();
     els.liveLogLatest.textContent = "已保存岗位备注";
+  });
+
+  document.getElementById("insp-open-followup")?.addEventListener("click", () => {
+    openFollowupModal(job.id, document.getElementById("insp-profile-select")?.value || preferredProfile);
   });
 
   document.getElementById("insp-open-page").addEventListener("click", async () => {
@@ -1815,8 +1840,9 @@ function renderDeliveries() {
           <div class="delivery-card-actions">
             <span class="muted" style="font-size:12px;">${esc(l.detail || "")}</span>
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              ${l.job_id ? `<button type="button" class="btn btn-primary btn-xs" data-deliv-followup="${l.job_id}" data-deliv-profile="${esc(l.profile_id)}">💬 连续沟通/回复模板</button>` : ""}
               ${l.job_id ? `<button type="button" class="btn btn-secondary btn-xs" data-deliv-jump="${l.job_id}">查看岗位详情</button>` : ""}
-              ${canSendImg ? `<button type="button" class="btn btn-primary btn-xs" data-deliv-send-img="${l.job_id}" data-deliv-profile="${esc(l.profile_id)}">🖼️ 补发图片简历</button>` : ""}
+              ${canSendImg ? `<button type="button" class="btn btn-secondary btn-xs" data-deliv-send-img="${l.job_id}" data-deliv-profile="${esc(l.profile_id)}">🖼️ 补发图片简历</button>` : ""}
               ${l.job_id ? `<button type="button" class="btn btn-ghost btn-xs" data-deliv-open="${l.job_id}" data-deliv-profile="${esc(l.profile_id)}">在 Ego 打开</button>` : ""}
             </div>
           </div>
@@ -1824,6 +1850,12 @@ function renderDeliveries() {
       `;
     })
     .join("");
+
+  els.deliveriesList.querySelectorAll("[data-deliv-followup]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      openFollowupModal(Number(btn.dataset.delivFollowup), btn.dataset.delivProfile);
+    });
+  });
 
   els.deliveriesList.querySelectorAll("[data-deliv-jump]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -1921,6 +1953,210 @@ els.btnSyncBossChats?.addEventListener("click", async () => {
   } catch (err) {
     alert(err.message);
   } finally {
+    setWorkerBusy(false);
+  }
+});
+
+// ============================================================================
+// Continuous Follow-up & Multi-Turn Reply Advisor
+// ============================================================================
+function renderFollowupModalBody() {
+  const job = (state.data?.jobs || []).find((j) => j.id === state.followupJobId);
+  if (!job) return;
+  const msgs = state.followupMessages || [];
+  const hasImgAsset = Boolean(state.data?.resume_image?.exists);
+
+  els.followupModalSub.textContent = `${job.company_name} · ${job.job_title} · 账号 ${state.followupProfileId} · 当前状态：${STATUS_LABELS[job.status] || job.status}`;
+  els.followupImgUnlockPill.textContent = !hasImgAsset
+    ? "未配置图片简历"
+    : state.followupCanSendImg
+      ? "🖼️ Boss已解锁发图"
+      : msgs.some((m) => m.sender === "HR")
+        ? "🖼️ HR已回，可尝试发图"
+        : "⏳ 对方回复前 Boss 暂锁首图";
+
+  if (msgs.length === 0) {
+    els.followupChatThread.innerHTML = `<div class="muted" style="text-align:center;margin:auto;">暂无本地缓存对话，点击右上角「🔄 拉取最新 Boss 对话」或在下方手动贴入 HR 回复。</div>`;
+  } else {
+    els.followupChatThread.innerHTML = msgs
+      .map((m) => `
+        <div class="chat-bubble ${m.sender === "ME" ? "chat-bubble-me" : "chat-bubble-hr"}">
+          <div class="chat-bubble-meta">${m.sender === "ME" ? "我" : "HR"}${m.time ? ` · ${esc(m.time)}` : ""}</div>
+          <div>${esc(m.text)}</div>
+        </div>
+      `)
+      .join("");
+    els.followupChatThread.scrollTop = els.followupChatThread.scrollHeight;
+  }
+
+  const adv = state.followupAdvice;
+  if (adv) {
+    els.followupIntentTitle.textContent = `🎯 识别对方意图：${adv.intent_label || "待分析"}${adv.used_llm ? "（AI 深度定制）" : ""}`;
+    els.followupStrategyTip.textContent = adv.strategy_tip || "";
+    const curText = els.followupReplyTextarea.value.trim();
+    els.followupTemplatesList.innerHTML = (adv.templates || [])
+      .map((t, idx) => `
+        <button type="button" class="reply-tpl-card ${curText === t.text ? "active" : ""}" data-followup-tpl="${idx}">
+          <div class="reply-tpl-head">
+            <span>${esc(t.label)}</span>
+            <span class="meta-pill">${esc(t.tag || "参考")}</span>
+          </div>
+          <div class="muted" style="font-size:12px;line-height:1.45;">${esc(t.text)}</div>
+        </button>
+      `)
+      .join("");
+    els.followupTemplatesList.querySelectorAll("[data-followup-tpl]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tpl = adv.templates[Number(btn.dataset.followupTpl)];
+        if (!tpl) return;
+        els.followupReplyTextarea.value = tpl.text;
+        els.followupReplyLen.textContent = String(tpl.text.length);
+        els.followupTemplatesList.querySelectorAll("[data-followup-tpl]").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+      });
+    });
+  }
+
+  els.followupSendImgChk.disabled = !hasImgAsset;
+  if (!hasImgAsset) els.followupSendImgChk.checked = false;
+}
+
+async function openFollowupModal(jobId, profileId) {
+  const job = (state.data?.jobs || []).find((j) => j.id === jobId);
+  if (!job) return;
+  state.followupJobId = jobId;
+  state.followupProfileId = profileId || job.assigned_profile_id || job.source_profile_id || "Profile 1";
+  state.followupMessages = Array.isArray(job.chat_messages) ? [...job.chat_messages] : [];
+  state.followupCanSendImg = false;
+  state.followupAdvice = null;
+  els.followupManualHrInput.value = "";
+  els.followupReplyTextarea.value = "";
+  els.followupReplyLen.textContent = "0";
+  els.followupSendImgChk.checked = false;
+
+  renderFollowupModalBody();
+  if (!els.followupModal.open) els.followupModal.showModal();
+
+  try {
+    const res = await api(`/api/jobs/${jobId}/chat/suggest`, {
+      method: "POST",
+      body: JSON.stringify({ profileId: state.followupProfileId, messages: state.followupMessages }),
+    });
+    state.followupAdvice = res.advice;
+    if (res.advice?.templates?.[0] && !els.followupReplyTextarea.value) {
+      els.followupReplyTextarea.value = res.advice.templates[0].text;
+      els.followupReplyLen.textContent = String(res.advice.templates[0].text.length);
+    }
+    renderFollowupModalBody();
+  } catch (err) {
+    els.followupStrategyTip.textContent = `生成模板失败：${err.message}`;
+  }
+}
+
+els.followupReplyTextarea?.addEventListener("input", () => {
+  els.followupReplyLen.textContent = String(els.followupReplyTextarea.value.length);
+});
+
+els.followupSyncBtn?.addEventListener("click", async () => {
+  if (!state.followupJobId) return;
+  els.followupSyncBtn.disabled = true;
+  setWorkerBusy(true, "正在从 Boss 拉取真实对话记录并对齐回复模板...");
+  try {
+    const res = await api(`/api/jobs/${state.followupJobId}/chat/sync`, {
+      method: "POST",
+      body: JSON.stringify({ profileId: state.followupProfileId, customHint: els.followupManualHrInput.value.trim() }),
+    });
+    if (res.status === "VERIFICATION_REQUIRED") {
+      showVerifyBanner(res);
+      return;
+    }
+    if (res.chatStatus === "NOT_FOUND" && res.message) {
+      alert(res.message);
+    }
+    state.followupMessages = res.messages || [];
+    state.followupCanSendImg = Boolean(res.canSendImage);
+    state.followupAdvice = res.advice || state.followupAdvice;
+    if (res.advice?.templates?.[0]) {
+      els.followupReplyTextarea.value = res.advice.templates[0].text;
+      els.followupReplyLen.textContent = String(res.advice.templates[0].text.length);
+    }
+    if (state.followupCanSendImg && state.data?.resume_image?.exists) {
+      els.followupSendImgChk.checked = true;
+    }
+    await refreshState();
+    renderFollowupModalBody();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    els.followupSyncBtn.disabled = false;
+    setWorkerBusy(false);
+  }
+});
+
+els.followupRecalcBtn?.addEventListener("click", async () => {
+  if (!state.followupJobId) return;
+  const manualLine = els.followupManualHrInput.value.trim();
+  const nextMsgs = manualLine
+    ? [...(state.followupMessages || []), { sender: "HR", time: "刚才", text: manualLine }]
+    : (state.followupMessages || []);
+  state.followupMessages = nextMsgs;
+  els.followupManualHrInput.value = "";
+  try {
+    const res = await api(`/api/jobs/${state.followupJobId}/chat/suggest`, {
+      method: "POST",
+      body: JSON.stringify({ profileId: state.followupProfileId, messages: nextMsgs, customHint: manualLine }),
+    });
+    state.followupAdvice = res.advice;
+    if (res.advice?.templates?.[0]) {
+      els.followupReplyTextarea.value = res.advice.templates[0].text;
+      els.followupReplyLen.textContent = String(res.advice.templates[0].text.length);
+    }
+    renderFollowupModalBody();
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+els.followupCopyBtn?.addEventListener("click", async () => {
+  const txt = els.followupReplyTextarea.value.trim();
+  if (!txt) return;
+  await navigator.clipboard.writeText(txt);
+  els.followupCopyBtn.textContent = "✅ 已复制";
+  setTimeout(() => { els.followupCopyBtn.textContent = "📋 复制回复"; }, 1400);
+});
+
+els.followupSendBtn?.addEventListener("click", async () => {
+  if (!state.followupJobId) return;
+  const replyText = els.followupReplyTextarea.value.trim();
+  const sendImageResume = Boolean(els.followupSendImgChk.checked);
+  if (!replyText && !sendImageResume) return alert("请先选择或输入回复内容，或勾选图片简历");
+  els.followupSendBtn.disabled = true;
+  setWorkerBusy(true, "正在通过 Ego 发送跟进回复...");
+  try {
+    const res = await api(`/api/jobs/${state.followupJobId}/chat/send`, {
+      method: "POST",
+      body: JSON.stringify({
+        profileId: state.followupProfileId,
+        replyText,
+        sendImageResume,
+      }),
+    });
+    if (res.status === "VERIFICATION_REQUIRED") {
+      showVerifyBanner(res);
+      return;
+    }
+    state.followupMessages = res.messages || state.followupMessages;
+    state.followupAdvice = res.advice || state.followupAdvice;
+    els.followupReplyTextarea.value = "";
+    els.followupReplyLen.textContent = "0";
+    els.liveLogLatest.textContent = res.delivery?.message || "已发送回复";
+    await refreshState();
+    renderFollowupModalBody();
+    alert(res.delivery?.message || "已发送回复");
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    els.followupSendBtn.disabled = false;
     setWorkerBusy(false);
   }
 });

@@ -540,6 +540,64 @@
     </div>
   </dialog>
 
+  <!-- Continuous Follow-up & Reply Advisor Dialog -->
+  <dialog id="followup-modal" closedby="any" aria-labelledby="followup-modal-title">
+    <div class="modal-shell modal-shell-lg">
+      <header class="modal-head">
+        <div>
+          <h1 id="followup-modal-title" class="modal-title-h1">连续沟通与智能回复对齐</h1>
+          <div id="followup-modal-sub" class="muted" style="font-size:12px;"></div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button type="button" id="followup-sync-btn" class="btn btn-primary btn-xs">🔄 拉取最新 Boss 对话</button>
+          <form method="dialog">
+            <button type="submit" class="btn btn-ghost btn-xs" value="close">关闭</button>
+          </form>
+        </div>
+      </header>
+      <div class="modal-pad stack-md">
+        <div class="followup-grid">
+          <div class="stack-sm">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <strong style="font-size:13px;">💬 双方历史对话</strong>
+              <span id="followup-img-unlock-pill" class="meta-pill">待拉取实时状态</span>
+            </div>
+            <div id="followup-chat-thread" class="chat-thread-box"></div>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input type="text" id="followup-manual-hr-input" class="input-compact" style="flex:1;" placeholder="或手动粘贴 HR 最新一句话（手机上收到的消息）...">
+              <button type="button" id="followup-recalc-btn" class="btn btn-secondary btn-xs">✨ 对齐生成模板</button>
+            </div>
+          </div>
+
+          <div class="stack-sm">
+            <div id="followup-strategy-box" class="alert-strip alert-info" style="border-radius:8px;margin:0;">
+              <div>
+                <strong id="followup-intent-title">🎯 识别对方意图：待分析</strong>
+                <div id="followup-strategy-tip" class="muted" style="font-size:12px;margin-top:2px;"></div>
+              </div>
+            </div>
+            <strong style="font-size:13px;">✨ 3 套参考回复模板（点选即可填入修改）</strong>
+            <div id="followup-templates-list" class="stack-sm"></div>
+            <label class="stack-sm" style="gap:4px;">
+              <span style="font-size:12.5px;font-weight:600;">拟发送的回复内容（可自由编辑，<span id="followup-reply-len">0</span> 字）</span>
+              <textarea id="followup-reply-textarea" class="greet-textarea" rows="4" placeholder="点选上方任意模板，或自己输入回复..."></textarea>
+            </label>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+              <label class="check-label" for="followup-send-img-chk">
+                <input type="checkbox" id="followup-send-img-chk">
+                <span>顺带发出高清图片简历</span>
+              </label>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" id="followup-copy-btn" class="btn btn-secondary btn-sm">📋 复制回复</button>
+                <button type="button" id="followup-send-btn" class="btn btn-boss btn-sm">💬 发送到 Boss</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
   <!-- GitHub Release Update Dialog -->
   <dialog id="update-modal" closedby="any" aria-labelledby="update-modal-title">
     <div class="modal-shell modal-shell-sm">

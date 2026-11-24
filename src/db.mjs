@@ -185,6 +185,7 @@ ensureColumn("jobs", "longitude", "REAL");
 ensureColumn("jobs", "latitude", "REAL");
 ensureColumn("jobs", "customer_brand", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("jobs", "commute_json", "TEXT NOT NULL DEFAULT '{}'");
+ensureColumn("jobs", "chat_messages_json", "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn("delivery_logs", "normalized_company", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("delivery_logs", "job_title", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("delivery_logs", "text_sent", "INTEGER NOT NULL DEFAULT 0");
@@ -766,6 +767,7 @@ export function updateJobRouting(id, patch) {
       latitude = COALESCE(?, latitude),
       commute_json = COALESCE(?, commute_json),
       tailored_resume_json = COALESCE(?, tailored_resume_json),
+      chat_messages_json = COALESCE(?, chat_messages_json),
       updated_at = ?
     WHERE id = ?
   `).run(
@@ -781,6 +783,7 @@ export function updateJobRouting(id, patch) {
     patch.latitude ?? null,
     patch.commute ? JSON.stringify(patch.commute) : null,
     patch.tailored_resume ? JSON.stringify(patch.tailored_resume) : null,
+    patch.chat_messages ? JSON.stringify(patch.chat_messages) : null,
     ts,
     id
   );
@@ -1088,6 +1091,7 @@ function hydrateJob(row) {
     match: safeJson(row.match_json, {}),
     tailored_resume: safeJson(row.tailored_resume_json, {}),
     commute: safeJson(row.commute_json, {}),
+    chat_messages: safeJson(row.chat_messages_json, []),
   };
 }
 

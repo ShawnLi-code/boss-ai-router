@@ -9,6 +9,7 @@ import path from "node:path";
 import { RESUME_ASSETS_DIR, addDeliveryLog, db, getCompanyDeliveryHistory, getResumeImageMeta, getScrapeTelemetry, listDeliveryLogs, listKnownExternalIds, listPatrolRuns, normalizeCompanyRoot, recordPatrolRun, saveResumeImageMeta, upsertJob } from "../src/db.mjs";
 import { buildBossSearchUrl, isBossVerificationUrl } from "../src/ego-worker.mjs";
 import { compareSemver } from "../src/updater.mjs";
+import { analyzeConversationAndSuggestReplies } from "../src/reply-advisor.mjs";
 
 test("RED zone: 银行/金融 + 实锤第三方背调 + HRBP 应命中 A轨_真实日期版", () => {
   const job = {
@@ -637,6 +638,51 @@ test("沟通记录持久化和防重复检测：记录文字/图片状态并拦�
     if (logId) db.prepare("DELETE FROM delivery_logs WHERE id = ?").run(logId);
     db.prepare("DELETE FROM jobs WHERE id = ?").run(job.id);
   }
+});
+
+test("连续对话智能回复建议：识别年限质疑/索要简历/邀约面试并生成3套贴合简历模板", () => {
+  const job = {
+    company_name: "绿蕃茄软件科技",
+    job_title: "测试工程师",
+    jd_text: "负责软件测试、接口自动化测试与Linux排查。",
+    match: { matched_keywords: ["接口测试", "自动化测试", "Linux"] },
+  };
+  const resume = {
+    years_label: "1年经验",
+    summary: "独立负责AI与全链路接口测试",
+    skills: ["Python", "Pytest", "Linux", "Postman"],
+    experiences: [{ company: "示例科技", role: "AI应用测试工程师", content: "独立负责大模型接口批测与抓包排障" }],
+    projects: [{ name: "语音智能体测试" }],
+  };
+
+  const expGap = analyzeConversationAndSuggestReplies({
+    job,
+    resume,
+    messages: [
+      { sender: "ME", text: "您好，希望有机会沟通！" },
+      { sender: "HR", text: "你好，我们需要至少3年以上经验哦，感谢投递～" },
+    ],
+  });
+  assert.equal(expGap.intent, "EXP_GAP");
+  assert.equal(expGap.templates.length, 3);
+  assert.ok(expGap.templates[0].text.includes("1年经验"));
+  assert.ok(!expGap.templates[0].text.includes("独立独立"));
+
+  const askRes = analyzeConversationAndSuggestReplies({
+    job,
+    resume,
+    messages: [{ sender: "HR", text: "方便发份简历看看吗？" }],
+  });
+  assert.equal(askRes.intent, "ASK_RESUME");
+  assert.equal(askRes.templates.length, 3);
+
+  const iv = analyzeConversationAndSuggestReplies({
+    job,
+    resume,
+    messages: [{ sender: "HR", text: "明天下午方便约个线下面试吗？" }],
+  });
+  assert.equal(iv.intent, "INTERVIEW_INVITE");
+  assert.equal(iv.templates.length, 3);
 });
 
 

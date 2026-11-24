@@ -1233,6 +1233,328 @@ try {
   }
 }
 
+export async function fetchBossConversationMessages({
+  profileId,
+  companyName = "",
+  jobTitle = "",
+  externalId = "",
+  onLog = () => {},
+}) {
+  acquireLock(`拉取 Boss 对话内容 (${companyName || profileId})`);
+  try {
+    onLog(`正在打开 ${profileId} 的 Boss 聊天记录以对齐「${companyName}」最新对话...`);
+    const code = `
+const randDelay = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
+const task = await taskSpace("boss-read-chat-" + Date.now(), { profileId: ${JSON.stringify(profileId)} });
+let handedOff = false;
+try {
+  const page = (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
+  await page.goto("https://www.zhipin.com/web/geek/chat", { waitUntil: "domcontentloaded", timeout: 25000 });
+  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+  await page.waitForTimeout(randDelay(2000, 2800));
+
+  const verify = await page.evaluate(() => {
+    const body = (document.body?.innerText || "").slice(0, 600);
+    return /verify-slider|security-check|\\/security(?:\\/|$)|\\/web\\/user/i.test(location.pathname)
+      || /请完成安全验证|拖动滑块|点击按钮进行验证|访问异常|账号异常|扫码登录/.test(body);
+  });
+  if (verify) {
+    handedOff = true;
+    const url = await page.url().catch(() => "");
+    await task.handOff();
+    console.log("RESULT_JSON:" + JSON.stringify({
+      status: "VERIFICATION_REQUIRED",
+      taskSpaceId: task.spaceId,
+      url,
+      messages: [],
+      message: "拉取 Boss 对话需要登录或安全验证，请在 Ego 完成后重试",
+    }));
+    process.exit(0);
+  }
+
+  const targetMeta = {
+    externalId: ${JSON.stringify(String(externalId || ""))},
+    companyName: ${JSON.stringify(String(companyName || ""))},
+    jobTitle: ${JSON.stringify(String(jobTitle || ""))},
+  };
+
+  const pickIdx = await page.evaluate((meta) => {
+    const nodes = [...document.querySelectorAll(".user-list .friend-content, .chat-user .friend-content, li.friend-content, .geek-item, [class*='friend-item']")];
+    for (let i = 0; i < nodes.length; i++) {
+      const el = nodes[i];
+      const li = el.closest("li") || el.parentElement;
+      const vue = li?.__vue__ || el.__vue__ || {};
+      const src = vue._props?.source || vue.data || vue.source || vue.friend || {};
+      if (meta.externalId && src.encryptJobId === meta.externalId) return i;
+    }
+    for (let i = 0; i < nodes.length; i++) {
+      const el = nodes[i];
+      const li = el.closest("li") || el.parentElement;
+      const vue = li?.__vue__ || el.__vue__ || {};
+      const src = vue._props?.source || vue.data || vue.source || vue.friend || {};
+      const brand = String(src.brandName || src.companyName || el.innerText || "");
+      const pos = String(src.positionName || src.jobName || "");
+      if (meta.companyName && brand.includes(meta.companyName)) {
+        if (!meta.jobTitle || !pos || pos.includes(meta.jobTitle) || meta.jobTitle.includes(pos)) return i;
+      }
+    }
+    return -1;
+  }, targetMeta);
+
+  if (pickIdx < 0) {
+    await task.finish({ keep: [] });
+    console.log("RESULT_JSON:" + JSON.stringify({
+      status: "NOT_FOUND",
+      messages: [],
+      canSendImage: false,
+      message: "当前账号最近聊天列表中未找到该公司的会话，可能尚未开聊或需切换另一个账号。",
+    }));
+    process.exit(0);
+  }
+
+  await page.click(".user-list .friend-content >> nth=" + pickIdx, { label: "select target chat thread" });
+  await page.waitForTimeout(randDelay(1500, 2200));
+
+  const extracted = await page.evaluate(() => {
+    const msgEls = [...document.querySelectorAll(".chat-message .message-item, .message-content li.message-item, [class*='message-item']")].slice(-25);
+    const messages = [];
+    for (const el of msgEls) {
+      const cls = String(el.className || "");
+      if (cls.includes("item-system")) continue;
+      const sender = cls.includes("item-myself") ? "ME" : "HR";
+      const raw = (el.innerText || "").trim();
+      if (!raw || /与该职位竞争者PK情况|查看详细分析|你撤回了一条消息|正在加载/.test(raw)) continue;
+      const lines = raw.split(/\\n+/).map((x) => x.trim()).filter(Boolean);
+      let time = "";
+      if (lines[0] && /^(\\d{1,2}:\\d{2}|昨天|前天|\\d+月\\d+日)$/.test(lines[0])) {
+        time = lines.shift();
+      }
+      if (lines[0] && /^(已读|送达|未读)$/.test(lines[0])) {
+        lines.shift();
+      }
+      const cleanText = lines.join("\\n").trim();
+      if (!cleanText) continue;
+      messages.push({ sender, time, text: cleanText });
+    }
+    const imgWrap = document.querySelector(".btn-sendimg, [aria-label='发送图片']");
+    const imgInp = imgWrap?.querySelector("input[type='file']");
+    const imgCls = [imgWrap?.className || "", imgWrap?.parentElement?.className || ""].join(" ");
+    const imgTip = (imgWrap?.innerText || imgWrap?.getAttribute("title") || "").trim();
+    const canSendImage = Boolean(imgInp && !imgInp.disabled && !/unable|disable/i.test(imgCls) && !/回复后/.test(imgTip));
+    return { messages, canSendImage };
+  });
+
+  await task.finish({ keep: [] });
+  console.log("RESULT_JSON:" + JSON.stringify({
+    status: "OK",
+    messages: extracted.messages,
+    canSendImage: extracted.canSendImage,
+  }));
+} finally {
+  if (!handedOff) {
+    await task.finish({ keep: [] }).catch(() => {});
+  }
+}
+`;
+    const { combined } = await runEgoScript("read-chat", code, 75_000);
+    const res = parseMarkedJson(combined);
+    if (res.status === "OK") {
+      onLog(`💬 已读取「${companyName}」最近 ${(res.messages || []).length} 条对话记录`);
+    }
+    return res;
+  } finally {
+    releaseLock();
+  }
+}
+
+export async function sendBossReplyMessage({
+  profileId,
+  companyName = "",
+  jobTitle = "",
+  externalId = "",
+  replyText = "",
+  sendImageResume = false,
+  imagePath = "",
+  onLog = () => {},
+}) {
+  const hasImage = Boolean(sendImageResume && imagePath && fs.existsSync(imagePath));
+  const normalizedImagePath = hasImage ? imagePath.replace(/\\\\/g, "/") : "";
+  acquireLock(`发送连续回复「${companyName}」(${profileId})`);
+  try {
+    onLog(`正在用 ${profileId} 发送跟进回复给「${companyName}」...`);
+    const code = `
+const randDelay = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
+const task = await taskSpace("boss-reply-" + Date.now(), { profileId: ${JSON.stringify(profileId)} });
+let handedOff = false;
+try {
+  const page = (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
+  await page.goto("https://www.zhipin.com/web/geek/chat", { waitUntil: "domcontentloaded", timeout: 25000 });
+  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+  await page.waitForTimeout(randDelay(2000, 2800));
+
+  const verify = await page.evaluate(() => {
+    const body = (document.body?.innerText || "").slice(0, 600);
+    return /verify-slider|security-check|\\/security(?:\\/|$)|\\/web\\/user/i.test(location.pathname)
+      || /请完成安全验证|拖动滑块|点击按钮进行验证|访问异常|账号异常|扫码登录/.test(body);
+  });
+  if (verify) {
+    handedOff = true;
+    const url = await page.url().catch(() => "");
+    await task.handOff();
+    console.log("RESULT_JSON:" + JSON.stringify({
+      status: "VERIFICATION_REQUIRED",
+      taskSpaceId: task.spaceId,
+      url,
+      message: "发送回复需要登录或安全验证，请在 Ego 完成后重试",
+    }));
+    process.exit(0);
+  }
+
+  const targetMeta = {
+    externalId: ${JSON.stringify(String(externalId || ""))},
+    companyName: ${JSON.stringify(String(companyName || ""))},
+    jobTitle: ${JSON.stringify(String(jobTitle || ""))},
+  };
+  const pickIdx = await page.evaluate((meta) => {
+    const nodes = [...document.querySelectorAll(".user-list .friend-content, .chat-user .friend-content, li.friend-content, .geek-item, [class*='friend-item']")];
+    for (let i = 0; i < nodes.length; i++) {
+      const el = nodes[i];
+      const li = el.closest("li") || el.parentElement;
+      const vue = li?.__vue__ || el.__vue__ || {};
+      const src = vue._props?.source || vue.data || vue.source || vue.friend || {};
+      if (meta.externalId && src.encryptJobId === meta.externalId) return i;
+    }
+    for (let i = 0; i < nodes.length; i++) {
+      const el = nodes[i];
+      const li = el.closest("li") || el.parentElement;
+      const vue = li?.__vue__ || el.__vue__ || {};
+      const src = vue._props?.source || vue.data || vue.source || vue.friend || {};
+      const brand = String(src.brandName || src.companyName || el.innerText || "");
+      const pos = String(src.positionName || src.jobName || "");
+      if (meta.companyName && brand.includes(meta.companyName)) {
+        if (!meta.jobTitle || !pos || pos.includes(meta.jobTitle) || meta.jobTitle.includes(pos)) return i;
+      }
+    }
+    return -1;
+  }, targetMeta);
+
+  if (pickIdx < 0) {
+    await task.finish({ keep: [] });
+    console.log("RESULT_JSON:" + JSON.stringify({
+      status: "NOT_FOUND",
+      textSent: false,
+      imageSent: false,
+      message: "未在当前账号聊天列表找到该会话，请核对是否选对了账号。",
+    }));
+    process.exit(0);
+  }
+
+  await page.click(".user-list .friend-content >> nth=" + pickIdx, { label: "open chat thread for reply" });
+  await page.waitForTimeout(randDelay(1400, 2000));
+
+  const inputSelector = "div.chat-input[contenteditable='true'], textarea.input-area, .chat-conversation [contenteditable='true']";
+  const hasInput = await page.waitForSelector(inputSelector, { state: "visible", timeout: 6000 }).then(() => true).catch(() => false);
+  const replyText = ${JSON.stringify(String(replyText || "").trim())};
+  let textSent = false;
+  let imageSent = false;
+  let imageBlockedReason = "";
+
+  if (hasInput && replyText) {
+    await page.click(inputSelector, { label: "focus reply input" });
+    await page.waitForTimeout(400);
+    await page.fill(inputSelector, replyText).catch(async () => {
+      await page.keyboard.paste(replyText);
+    });
+    await page.waitForTimeout(randDelay(650, 1100));
+    await page.click("button.btn-send, .btn-send", { label: "click send reply" }).catch(async () => {
+      await page.press(inputSelector, "Enter");
+    });
+    textSent = true;
+    await page.waitForTimeout(randDelay(1200, 1900));
+  }
+
+  if (${JSON.stringify(hasImage)}) {
+    const imgBtnState = await page.evaluate(() => {
+      const wrap = document.querySelector(".btn-sendimg, [aria-label='发送图片']");
+      const inp = wrap?.querySelector("input[type='file']")
+        || [...document.querySelectorAll(".chat-conversation input[type='file'], .chat-im input[type='file']")].find((i) => /image\\/gif|image\\/png/i.test(i.accept || ""));
+      if (!inp) return { found: false, reason: "当前聊天框未找到发图控件" };
+      const cls = [wrap?.className || "", wrap?.parentElement?.className || ""].join(" ");
+      const tip = (wrap?.innerText || wrap?.getAttribute("title") || "").trim();
+      const disabled = Boolean(inp.disabled || /unable|disable/i.test(cls) && /回复后/.test(tip) || /回复后/.test(tip));
+      if (disabled) return { found: true, enabled: false, reason: tip || "Boss 限制对方回复后才可发图" };
+      inp.setAttribute("data-ego-reply-img", "1");
+      return { found: true, enabled: true };
+    });
+
+    if (imgBtnState.found && imgBtnState.enabled) {
+      await page.setInputFiles("input[data-ego-reply-img='1']", [${JSON.stringify(normalizedImagePath)}]);
+      await page.waitForTimeout(1600);
+      const afterSet = await page.evaluate(() => {
+        const toastTxt = [...document.querySelectorAll(".toast, [class*='toast'], .boss-popup__content, .dialog-wrap")]
+          .filter((el) => getComputedStyle(el).display !== "none" && el.offsetHeight > 5)
+          .map((el) => (el.innerText || "").trim())
+          .join(" ");
+        if (/回复后.*发送|暂不支持|频繁/.test(toastTxt)) return { blocked: true, reason: toastTxt.slice(0, 80) };
+        const wraps = [...document.querySelectorAll(".dialog-wrap, .boss-popup__wrapper")].filter((el) => {
+          const s = getComputedStyle(el);
+          return s.display !== "none" && s.visibility !== "hidden" && el.offsetHeight > 40;
+        });
+        for (const w of wraps) {
+          const btn = [...w.querySelectorAll("button, .btn, span.btn, a.btn")].find((b) =>
+            /^(?:发送|确定|确认发送|确认)$/.test((b.innerText || "").trim())
+          );
+          if (btn) {
+            btn.setAttribute("data-ego-confirm-reply-img", "1");
+            return { blocked: false, needConfirm: true };
+          }
+        }
+        return { blocked: false, needConfirm: false };
+      });
+      if (afterSet.blocked) {
+        imageBlockedReason = afterSet.reason;
+      } else {
+        if (afterSet.needConfirm) {
+          await page.click("[data-ego-confirm-reply-img='1'] >> nth=0", { label: "confirm send reply image" }).catch(() => {});
+        }
+        await page.waitForTimeout(1600);
+        imageSent = true;
+      }
+    } else {
+      imageBlockedReason = imgBtnState.reason || "暂不可直接发图";
+    }
+  }
+
+  await task.finish({ keep: [] });
+  const msg = textSent && imageSent
+    ? "✅ 已发送回复并顺带发出高清图片简历！"
+    : textSent
+      ? (\`\${imageBlockedReason ? "✅ 已发送回复（图片未发出：" + imageBlockedReason + "）" : "✅ 已成功发送跟进回复！"}\`)
+      : imageSent
+        ? "✅ 已发出高清图片简历！"
+        : "⚠️ 未能找到输入框发送，请在 Ego 中查看会话。";
+  console.log("RESULT_JSON:" + JSON.stringify({
+    status: (textSent || imageSent) ? "SENT" : "FAILED",
+    textSent,
+    imageSent,
+    imageBlockedReason,
+    message: msg,
+  }));
+} finally {
+  if (!handedOff) {
+    await task.finish({ keep: [] }).catch(() => {});
+  }
+}
+`;
+    const { combined } = await runEgoScript("send-reply", code, 80_000);
+    const res = parseMarkedJson(combined);
+    onLog(`📨 ${res.message || "跟进回复完成"}`);
+    return res;
+  } finally {
+    releaseLock();
+  }
+}
+
 export async function renderResumeImageViaEgo({
   pdfRenderUrl = "",
   fallbackHtmlUrl = "",
