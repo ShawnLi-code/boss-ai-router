@@ -6,7 +6,7 @@ import { DEFAULT_TARGET_ROLES, evaluateJobEligibility, evaluateSalaryFit, factGu
 import { calculateBikePlusMetroMetrics } from "../src/commute.mjs";
 import fs from "node:fs";
 import path from "node:path";
-import { RESUME_ASSETS_DIR, addDeliveryLog, db, getCompanyDeliveryHistory, getResumeImageMeta, getScrapeTelemetry, listDeliveryLogs, listKnownExternalIds, listPatrolRuns, normalizeCompanyRoot, recordPatrolRun, saveResumeImageMeta, upsertJob } from "../src/db.mjs";
+import { RESUME_ASSETS_DIR, addDeliveryLog, db, getCompanyDeliveryHistory, getJob, getResumeImageMeta, getScrapeTelemetry, listDeliveryLogs, listKnownExternalIds, listPatrolRuns, normalizeCompanyRoot, recordPatrolRun, saveResumeImageMeta, updateJobRouting, upsertJob } from "../src/db.mjs";
 import { buildBossSearchUrl, isBossVerificationUrl } from "../src/ego-worker.mjs";
 import { compareSemver } from "../src/updater.mjs";
 import { analyzeConversationAndSuggestReplies } from "../src/reply-advisor.mjs";
@@ -700,6 +700,28 @@ test("批量投递话术风格选择：支持按 auto/direct/tech/bridge 精准�
   assert.equal(pickGreetingByTemplateStyle(mockJob, "direct"), "高匹配直投话术内容");
   assert.equal(pickGreetingByTemplateStyle(mockJob, "tech"), "突出技术成果话术内容");
   assert.equal(pickGreetingByTemplateStyle(mockJob, "bridge"), "精炼礼貌破冰话术内容");
+});
+
+test("Boss 7类会话标签状态持久化：boss_stage 与 boss_unread_count 正常读写", () => {
+  const job = upsertJob({
+    external_id: `mock-stage-${Date.now()}`,
+    job_title: "测试工程师",
+    company_name: "测试标签管理有限公司",
+    city: "广州",
+  });
+  try {
+    const updated = updateJobRouting(job.id, {
+      boss_stage: "EXCHANGED",
+      boss_unread_count: 2,
+    });
+    assert.equal(updated.boss_stage, "EXCHANGED");
+    assert.equal(updated.boss_unread_count, 2);
+    const reloaded = getJob(job.id);
+    assert.equal(reloaded.boss_stage, "EXCHANGED");
+    assert.equal(reloaded.boss_unread_count, 2);
+  } finally {
+    db.prepare("DELETE FROM jobs WHERE id = ?").run(job.id);
+  }
 });
 
 

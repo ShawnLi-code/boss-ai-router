@@ -186,6 +186,8 @@ ensureColumn("jobs", "latitude", "REAL");
 ensureColumn("jobs", "customer_brand", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("jobs", "commute_json", "TEXT NOT NULL DEFAULT '{}'");
 ensureColumn("jobs", "chat_messages_json", "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn("jobs", "boss_unread_count", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("jobs", "boss_stage", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("delivery_logs", "normalized_company", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("delivery_logs", "job_title", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("delivery_logs", "text_sent", "INTEGER NOT NULL DEFAULT 0");
@@ -768,6 +770,8 @@ export function updateJobRouting(id, patch) {
       commute_json = COALESCE(?, commute_json),
       tailored_resume_json = COALESCE(?, tailored_resume_json),
       chat_messages_json = COALESCE(?, chat_messages_json),
+      boss_unread_count = COALESCE(?, boss_unread_count),
+      boss_stage = COALESCE(?, boss_stage),
       updated_at = ?
     WHERE id = ?
   `).run(
@@ -784,6 +788,8 @@ export function updateJobRouting(id, patch) {
     patch.commute ? JSON.stringify(patch.commute) : null,
     patch.tailored_resume ? JSON.stringify(patch.tailored_resume) : null,
     patch.chat_messages ? JSON.stringify(patch.chat_messages) : null,
+    patch.boss_unread_count ?? null,
+    patch.boss_stage ?? null,
     ts,
     id
   );

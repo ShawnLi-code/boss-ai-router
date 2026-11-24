@@ -26,6 +26,7 @@ const state = {
   selectedWatchlist: new Set(DEFAULT_ROLES),
   editingResumeCtx: null,
   deliveryFilter: "ALL",
+  deliveryMaterial: "ALL",
   deliveryProfile: "ALL",
   deliverySearch: "",
   followupJobId: null,
@@ -111,6 +112,7 @@ const els = {
   deliveryLogsList: document.getElementById("delivery-logs-list"),
   deliveryKpiStrip: document.getElementById("delivery-kpi-strip"),
   deliveriesList: document.getElementById("deliveries-list"),
+  deliveryMaterialFilter: document.getElementById("delivery-material-filter"),
   deliveryProfileFilter: document.getElementById("delivery-profile-filter"),
   deliverySearchInput: document.getElementById("delivery-search-input"),
   btnSyncBossChats: document.getElementById("btn-sync-boss-chats"),
@@ -1806,6 +1808,14 @@ function renderSettings() {
   if (settings.min_hr_active && els.scrapeHrActive) els.scrapeHrActive.value = settings.min_hr_active;
 }
 
+const BOSS_STAGE_LABELS = {
+  NEW_GREET: "新招呼",
+  CHATTING: "仅沟通",
+  EXCHANGED: "有交换",
+  INTERVIEW: "有面试",
+  NOT_INTERESTED: "不感兴趣",
+};
+
 function buildConversationLedger() {
   const logs = (state.data?.logs || []).filter((l) => l.status === "DELIVERED");
   const jobsMap = new Map((state.data?.jobs || []).map((j) => [j.id, j]));
@@ -1819,7 +1829,6 @@ function buildConversationLedger() {
 
   const items = [];
   for (const [, rows] of groups) {
-    // rows are ordered DESC (newest first)
     const latest = rows[0];
     const job = latest.job_id ? jobsMap.get(latest.job_id) : null;
     const msgs = Array.isArray(job?.chat_messages) ? job.chat_messages.filter((m) => m && m.text) : [];
@@ -1845,6 +1854,17 @@ function buildConversationLedger() {
       lastText = latest.greeting_text || "";
     }
 
+    let bossStage = job?.boss_stage || "";
+    if (!bossStage) {
+      if (job?.status === "INTERVIEW") bossStage = "INTERVIEW";
+      else if (job?.status === "REJECTED") bossStage = "NOT_INTERESTED";
+      else if (/面试|约.*时间|线下面|视频面/.test(lastText)) bossStage = "INTERVIEW";
+      else if (/微信|交换|联系方式|加[vV]|已发送简历/.test(lastText)) bossStage = "EXCHANGED";
+      else if (/暂不合适|已招满|暂不考虑|感谢投递/.test(lastText)) bossStage = "NOT_INTERESTED";
+      else if (hrInitiated) bossStage = "NEW_GREET";
+      else bossStage = "CHATTING";
+    }
+
     items.push({
       job_id: latest.job_id,
       company_name: latest.company_name,
@@ -1855,6 +1875,8 @@ function buildConversationLedger() {
       created_at: latest.created_at,
       detail: latest.detail || "",
       msgCount: msgs.length || rows.length,
+      unreadCount: Number(job?.boss_unread_count || 0),
+      bossStage,
       sentByMe,
       hasHrMsg,
       hrInitiated,
@@ -1869,19 +1891,22 @@ function buildConversationLedger() {
 }
 
 function deliveryConvBadgesHtml(c) {
-  const stageBadge = c.hrInitiated
-    ? `<span class="zone-tag zone-YELLOW">📩 HR主动打招呼</span>`
-    : c.mutualReplied
-      ? `<span class="zone-tag zone-GREEN">💬 已回复互聊</span>`
-      : `<span class="zone-tag zone-GREEN">📤 我方已打招呼</span>`;
-
+  const unreadHtml = c.unreadCount > 0 ? `<span class="zone-tag zone-RED">未读 ${esc(c.unreadCount)}</span>` : "";
+  const stageColor = c.bossStage === "INTERVIEW" || c.bossStage === "EXCHANGED"
+    ? "zone-GREEN"
+    : c.bossStage === "NEW_GREET"
+      ? "zone-YELLOW"
+      : c.bossStage === "NOT_INTERESTED"
+        ? "zone-RED"
+        : "zone-GREEN";
+  const stageBadge = `<span class="zone-tag ${stageColor}">${esc(BOSS_STAGE_LABELS[c.bossStage] || "仅沟通")}</span>`;
   const materialBadge = c.hasImg
     ? `<span class="zone-tag zone-GREEN">🖼️ 已发送文字+图片</span>`
     : c.hasText
       ? `<span class="meta-pill">📝 已发送文字</span>`
-      : `<span class="meta-pill">待我方首轮回复</span>`;
+      : `<span class="meta-pill">HR主动发来</span>`;
 
-  return `${stageBadge} ${materialBadge}`;
+  return `${unreadHtml} ${stageBadge} ${materialBadge}`.trim();
 }
 
 function renderDeliveries() {
@@ -1890,29 +1915,33 @@ function renderDeliveries() {
   const uniqueCompanies = new Set(convs.map((c) => c.normalized_company || c.company_name)).size;
   const textOnlyCount = convs.filter((c) => c.hasText && !c.hasImg).length;
   const textAndImgCount = convs.filter((c) => c.hasText && c.hasImg).length;
-  const hrInitCount = convs.filter((c) => c.hrInitiated).length;
-  const mutualCount = convs.filter((c) => c.mutualReplied).length;
+  const unreadTotal = convs.filter((c) => c.unreadCount > 0).length;
+  const newGreetCount = convs.filter((c) => c.bossStage === "NEW_GREET").length;
+  const chattingCount = convs.filter((c) => c.bossStage === "CHATTING").length;
+  const exchangedCount = convs.filter((c) => c.bossStage === "EXCHANGED").length;
+  const interviewCount = convs.filter((c) => c.bossStage === "INTERVIEW").length;
+  const notIntCount = convs.filter((c) => c.bossStage === "NOT_INTERESTED").length;
 
   els.deliveryKpiStrip.innerHTML = `
     <div class="funnel-card">
-      <strong>累计沟通对话</strong>
+      <strong>全部对话</strong>
       <div style="font-size:16px;font-weight:700;">${esc(convs.length)} 个会话 <span class="muted" style="font-size:12px;">(${esc(uniqueCompanies)} 家企业)</span></div>
-      <div class="muted">同公司/同岗位合并展示，不重复建卡</div>
+      <div class="muted">按 Boss 标签分类管理</div>
     </div>
     <div class="funnel-card">
-      <strong>📝 已发送文字</strong>
-      <div style="font-size:16px;font-weight:700;color:var(--accent-teal);">${esc(textOnlyCount)} 个</div>
-      <div class="muted">已发打招呼或回复文字</div>
+      <strong>未读 / 新招呼</strong>
+      <div style="font-size:16px;font-weight:700;color:var(--yellow-fg);">未读 ${esc(unreadTotal)} · 新招呼 ${esc(newGreetCount)}</div>
+      <div class="muted">点「同步」更新 Boss 未读</div>
     </div>
     <div class="funnel-card">
-      <strong>🖼️ 已发送文字+图片</strong>
-      <div style="font-size:16px;font-weight:700;color:var(--green-fg);">${esc(textAndImgCount)} 个</div>
-      <div class="muted">已附带发出高清图片简历</div>
+      <strong>文字 / 图片发送</strong>
+      <div style="font-size:16px;font-weight:700;color:var(--accent-teal);">仅文字 ${esc(textOnlyCount)} · 文字+图片 ${esc(textAndImgCount)}</div>
+      <div class="muted">支持右侧按发送内容筛选</div>
     </div>
     <div class="funnel-card">
-      <strong>📩 主动 / 已回复状态</strong>
-      <div style="font-size:16px;font-weight:700;color:var(--yellow-fg);">HR主动 ${esc(hrInitCount)} · 互聊 ${esc(mutualCount)}</div>
-      <div class="muted">点卡片「连续沟通」对齐历史对话</div>
+      <strong>进展节点</strong>
+      <div style="font-size:16px;font-weight:700;color:var(--green-fg);">有交换 ${esc(exchangedCount)} · 有面试 ${esc(interviewCount)}</div>
+      <div class="muted">不感兴趣 ${esc(notIntCount)} 个</div>
     </div>
   `;
 
@@ -1926,17 +1955,21 @@ function renderDeliveries() {
   const q = state.deliverySearch.trim().toLowerCase();
   const setCount = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = String(n); };
   setCount("dcnt-all", convs.length);
-  setCount("dcnt-text-only", textOnlyCount);
-  setCount("dcnt-with-img", textAndImgCount);
-  setCount("dcnt-hr-init", hrInitCount);
-  setCount("dcnt-mutual", mutualCount);
+  setCount("dcnt-unread", unreadTotal);
+  setCount("dcnt-new-greet", newGreetCount);
+  setCount("dcnt-chatting", chattingCount);
+  setCount("dcnt-exchanged", exchangedCount);
+  setCount("dcnt-interview", interviewCount);
+  setCount("dcnt-not-interested", notIntCount);
 
   const filtered = convs.filter((c) => {
     if (state.deliveryProfile !== "ALL" && c.profile_id !== state.deliveryProfile) return false;
-    if (state.deliveryFilter === "TEXT_ONLY" && !(c.hasText && !c.hasImg)) return false;
-    if (state.deliveryFilter === "WITH_IMAGE" && !(c.hasText && c.hasImg)) return false;
-    if (state.deliveryFilter === "HR_INITIATED" && !c.hrInitiated) return false;
-    if (state.deliveryFilter === "MUTUAL" && !c.mutualReplied) return false;
+    if (state.deliveryMaterial === "TEXT_ONLY" && !(c.hasText && !c.hasImg)) return false;
+    if (state.deliveryMaterial === "WITH_IMAGE" && !(c.hasText && c.hasImg)) return false;
+    if (state.deliveryFilter === "UNREAD" && !(c.unreadCount > 0)) return false;
+    if (["NEW_GREET", "CHATTING", "EXCHANGED", "INTERVIEW", "NOT_INTERESTED"].includes(state.deliveryFilter)) {
+      if (c.bossStage !== state.deliveryFilter) return false;
+    }
     if (q) {
       const hay = `${c.company_name} ${c.job_title} ${c.profile_id} ${c.lastText} ${c.detail}`.toLowerCase();
       if (!hay.includes(q)) return false;
@@ -1945,7 +1978,7 @@ function renderDeliveries() {
   });
 
   if (filtered.length === 0) {
-    els.deliveriesList.innerHTML = `<p class="muted">当前筛选下暂无沟通对话。</p>`;
+    els.deliveriesList.innerHTML = `<p class="muted">当前标签下暂无会话。</p>`;
     return;
   }
 
@@ -1968,6 +2001,11 @@ function renderDeliveries() {
             </div>
             <div class="delivery-card-badges">
               ${deliveryConvBadgesHtml(c)}
+              ${c.job_id ? `
+                <select class="input-compact" style="padding:2px 6px;font-size:11.5px;" data-conv-stage="${c.job_id}" aria-label="切换 Boss 对话标签">
+                  ${Object.entries(BOSS_STAGE_LABELS).map(([k, v]) => `<option value="${k}" ${c.bossStage === k ? "selected" : ""}>${v}</option>`).join("")}
+                </select>
+              ` : ""}
             </div>
           </div>
           ${c.lastText ? `<div class="delivery-quote"><strong style="color:${c.lastSender === "HR" ? "var(--green-fg)" : "var(--accent-teal)"};">${quoteLabel}</strong>${esc(c.lastText)}</div>` : ""}
@@ -1984,6 +2022,16 @@ function renderDeliveries() {
       `;
     })
     .join("");
+
+  els.deliveriesList.querySelectorAll("[data-conv-stage]").forEach((sel) => {
+    sel.addEventListener("change", async () => {
+      await api(`/api/jobs/${sel.dataset.convStage}`, {
+        method: "PATCH",
+        body: JSON.stringify({ boss_stage: sel.value }),
+      });
+      await refreshState();
+    });
+  });
 
   els.deliveriesList.querySelectorAll("[data-deliv-followup]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -2058,6 +2106,11 @@ document.querySelectorAll(".seg-btn[data-delivery-filter]").forEach((btn) => {
     state.deliveryFilter = btn.dataset.deliveryFilter;
     renderDeliveries();
   });
+});
+
+els.deliveryMaterialFilter?.addEventListener("change", () => {
+  state.deliveryMaterial = els.deliveryMaterialFilter.value;
+  renderDeliveries();
 });
 
 els.deliveryProfileFilter?.addEventListener("change", () => {

@@ -1223,13 +1223,21 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
         const trackObj = getAccountTracks().find((t) => t.track_key === body.manual_track);
         assignedProfile = trackObj?.profile_id || null;
       }
+      let nextStatusFromStage = body.status;
+      if (!nextStatusFromStage && body.boss_stage) {
+        if (body.boss_stage === "INTERVIEW") nextStatusFromStage = "INTERVIEW";
+        else if (body.boss_stage === "NOT_INTERESTED") nextStatusFromStage = "REJECTED";
+        else if (job.status === "REJECTED" || job.status === "INTERVIEW") nextStatusFromStage = "REPLIED";
+      }
       const updated = updateJobRouting(job.id, {
         manual_track: body.manual_track,
         assigned_profile_id: assignedProfile,
         custom_greeting: body.custom_greeting,
-        status: body.status,
+        status: nextStatusFromStage,
         notes: body.notes,
         tailored_resume: body.tailored_resume,
+        boss_stage: body.boss_stage,
+        boss_unread_count: body.boss_unread_count,
       });
       if (body.status && ["DELIVERED", "REPLIED", "INTERVIEW"].includes(body.status)) {
         const hasLog = listDeliveryLogs(300).some((l) => l.job_id === job.id && l.status === "DELIVERED");
@@ -1305,12 +1313,24 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
               ? [...prevMsgs, { sender: ch.hr_replied ? "HR" : "ME", time: "最新", text: lastText }]
               : prevMsgs;
 
+            const unreadCnt = Number(ch.unread_count || 0);
             const statusChanged = mj.status === "NEW" || mj.status === "PREPARED" || (ch.hr_replied && mj.status === "DELIVERED");
-            if (statusChanged || nextMsgs.length !== prevMsgs.length) {
+            const unreadChanged = Number(mj.boss_unread_count || 0) !== unreadCnt;
+            let inferredStage = mj.boss_stage || "";
+            if (!inferredStage) {
+              if (/面试|约.*时间|线下面|视频面/.test(lastText)) inferredStage = "INTERVIEW";
+              else if (/微信|交换|联系方式|加[vV]|已发送简历/.test(lastText)) inferredStage = "EXCHANGED";
+              else if (/暂不合适|已招满|暂不考虑|感谢投递/.test(lastText)) inferredStage = "NOT_INTERESTED";
+              else if (ch.hr_replied && !prevMsgs.some((m) => m.sender === "ME")) inferredStage = "NEW_GREET";
+              else inferredStage = "CHATTING";
+            }
+            if (statusChanged || nextMsgs.length !== prevMsgs.length || unreadChanged || inferredStage !== (mj.boss_stage || "")) {
               updateJobRouting(mj.id, {
                 assigned_profile_id: pid,
                 status: statusChanged ? nextStatus : undefined,
                 chat_messages: nextMsgs.length !== prevMsgs.length ? nextMsgs : undefined,
+                boss_unread_count: unreadCnt,
+                boss_stage: inferredStage,
               });
             }
             const detailText = `从 Boss 历史聊天同步：${ch.recruiter_name || "HR"}${ch.hr_replied ? "（HR已回复）" : ""}${lastText ? ` · 最近消息「${lastText.slice(0, 40)}」` : ""}`;
@@ -1375,6 +1395,7 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
         assigned_profile_id: profileId,
         status: nextStatus,
         chat_messages: messages,
+        boss_unread_count: 0,
       });
       const advice = await generateContextualReplies({
         job: updatedJob,

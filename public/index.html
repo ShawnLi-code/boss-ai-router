@@ -251,14 +251,21 @@
 
         <section class="surface-box">
           <div class="subbar" style="padding:0 0 12px;border-bottom:1px solid var(--border-line);margin-bottom:12px;">
-            <div class="segmented" role="group" aria-label="沟通记录筛选">
-              <button type="button" class="seg-btn active" data-delivery-filter="ALL">全部对话 <span id="dcnt-all">0</span></button>
-              <button type="button" class="seg-btn" data-delivery-filter="TEXT_ONLY">📝 已发送文字 <span id="dcnt-text-only">0</span></button>
-              <button type="button" class="seg-btn" data-delivery-filter="WITH_IMAGE">🖼️ 已发送文字+图片 <span id="dcnt-with-img">0</span></button>
-              <button type="button" class="seg-btn" data-delivery-filter="HR_INITIATED">📩 HR主动打招呼 <span id="dcnt-hr-init">0</span></button>
-              <button type="button" class="seg-btn" data-delivery-filter="MUTUAL">💬 已回复互聊 <span id="dcnt-mutual">0</span></button>
+            <div class="segmented" role="group" aria-label="Boss 沟通状态筛选">
+              <button type="button" class="seg-btn active" data-delivery-filter="ALL">全部 <span id="dcnt-all">0</span></button>
+              <button type="button" class="seg-btn" data-delivery-filter="UNREAD">未读 <span id="dcnt-unread">0</span></button>
+              <button type="button" class="seg-btn" data-delivery-filter="NEW_GREET">新招呼 <span id="dcnt-new-greet">0</span></button>
+              <button type="button" class="seg-btn" data-delivery-filter="CHATTING">仅沟通 <span id="dcnt-chatting">0</span></button>
+              <button type="button" class="seg-btn" data-delivery-filter="EXCHANGED">有交换 <span id="dcnt-exchanged">0</span></button>
+              <button type="button" class="seg-btn" data-delivery-filter="INTERVIEW">有面试 <span id="dcnt-interview">0</span></button>
+              <button type="button" class="seg-btn" data-delivery-filter="NOT_INTERESTED">不感兴趣 <span id="dcnt-not-interested">0</span></button>
             </div>
             <div class="subbar-right">
+              <select id="delivery-material-filter" aria-label="按发送内容筛选" class="input-compact">
+                <option value="ALL">全部发送内容</option>
+                <option value="TEXT_ONLY">📝 已发送文字</option>
+                <option value="WITH_IMAGE">🖼️ 已发送文字+图片</option>
+              </select>
               <select id="delivery-profile-filter" aria-label="按账号筛选" class="input-compact">
                 <option value="ALL">全部账号</option>
               </select>

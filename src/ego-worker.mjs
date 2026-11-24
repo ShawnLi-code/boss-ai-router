@@ -1208,6 +1208,7 @@ try {
         recruiter_name: recruiterName,
         last_msg: lastMsg,
         hr_replied: hrReplied,
+        unread_count: Number(vueData.unreadCount || 0),
         raw_text: lines.join(" | ").slice(0, 140),
       });
     }
