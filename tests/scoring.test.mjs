@@ -725,12 +725,16 @@ test("Boss 7类会话标签状态持久化：boss_stage 与 boss_unread_count �
 });
 
 test("聊天会话匹配：同公司多岗位只匹配唯一最佳岗位，不扇出重复记录", () => {
-  const j1 = { id: 101, company_name: "软通动力", normalized_company: "软通动力", job_title: "大模型推理优化", source_profile_id: "Profile 2", match_score: 90 };
-  const j2 = { id: 102, company_name: "软通动力", normalized_company: "软通动力", job_title: "软件测试工程师", source_profile_id: "Profile 2", match_score: 85 };
+  const j1 = { id: 101, external_id: "ext-101", company_name: "软通动力", normalized_company: "软通动力", job_title: "大模型推理优化", source_profile_id: "Profile 2", match_score: 90 };
+  const j2 = { id: 102, external_id: "ext-102", company_name: "软通动力", normalized_company: "软通动力", job_title: "软件测试工程师", source_profile_id: "Profile 2", match_score: 85 };
   const picked = pickBestMatchedJobForChat([j1, j2], [], { company_name: "软通动力", job_title: "测试工程师" }, "Profile 2");
   assert.equal(picked?.id, 102);
 
-  const pickedExisting = pickBestMatchedJobForChat([j1, j2], [{ job_id: 101, profile_id: "Profile 2", status: "DELIVERED" }], { company_name: "软通动力", job_title: "测试工程师" }, "Profile 2");
+  // 若会话自带不同的 external_id，绝不张冠李戴匹配到本地其他岗位
+  const mismatchExt = pickBestMatchedJobForChat([j1, j2], [], { external_id: "ext-999", company_name: "软通动力", job_title: "软件测试工程师" }, "Profile 2");
+  assert.equal(mismatchExt, null);
+
+  const pickedExisting = pickBestMatchedJobForChat([j1, j2], [{ job_id: 101, profile_id: "Profile 2", status: "DELIVERED" }], { company_name: "软通动力", job_title: "大模型推理优化" }, "Profile 2");
   assert.equal(pickedExisting?.id, 101);
 });
 

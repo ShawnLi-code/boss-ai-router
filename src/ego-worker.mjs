@@ -571,11 +571,12 @@ async function checkVerify() {
 
 if (await checkVerify()) {
   handedOff = true;
+  const verifyUrl = await page.url().catch(() => "");
   await task.handOff();
   console.log("RESULT_JSON:" + JSON.stringify({
     status: "VERIFICATION_REQUIRED",
     taskSpaceId: task.spaceId,
-    url: await page.url(),
+    url: verifyUrl,
     jobs: [],
     stats: { scannedCards: 0, detailClicks: 0, skippedExisting: 0, skippedPreFilter: 0 },
   }));
@@ -684,11 +685,12 @@ for (let idx = 0; idx < maxScanCards && collected.length < totalTarget && detail
 
   if (await checkVerify()) {
     handedOff = true;
+    const verifyUrl = await page.url().catch(() => "");
     await task.handOff();
     console.log("RESULT_JSON:" + JSON.stringify({
       status: "VERIFICATION_REQUIRED",
       taskSpaceId: task.spaceId,
-      url: await page.url(),
+      url: verifyUrl,
       jobs: collected,
       stats: { scannedCards: scannedIdx, detailClicks, skippedExisting, skippedPreFilter },
     }));
@@ -872,11 +874,12 @@ const task = await taskSpace("boss-open-" + Date.now(), { profileId: ${JSON.stri
 const page = (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
 await page.goto(${JSON.stringify(targetUrl)}, { waitUntil: "domcontentloaded", timeout: 25000 });
 await page.waitForTimeout(1600);
+const handoffUrl = await page.url().catch(() => ${JSON.stringify(targetUrl)});
 await task.handOff();
 console.log("RESULT_JSON:" + JSON.stringify({
   status: "HANDOFF",
   taskSpaceId: task.spaceId,
-  url: await page.url(),
+  url: handoffUrl,
   message: "已在 Ego 浏览器打开岗位页面并交给你操作，你可以直接查看或发起沟通、发送简历",
 }));
 `;
@@ -956,11 +959,12 @@ if (verifyState.chatBtnText.includes("立即沟通")) {
 }
 
 if (await page.evaluate(() => /verify-slider|security-check|\\/security(?:\\/|$)/i.test(location.pathname) || /请完成安全验证|拖动滑块/.test(document.body?.innerText || ""))) {
+  const verifyUrl = await page.url().catch(() => "");
   await task.handOff();
   console.log("RESULT_JSON:" + JSON.stringify({
     status: "VERIFICATION_REQUIRED",
     taskSpaceId: task.spaceId,
-    url: await page.url(),
+    url: verifyUrl,
     message: "点击沟通后触发安全验证，已移交给你在 Ego 浏览器处理",
   }));
   process.exit(0);
@@ -1231,9 +1235,13 @@ try {
       if (seen.has(key)) continue;
       seen.add(key);
       out.push({
+        idx: out.length,
+        domIdx: nodes.indexOf(el),
         external_id: externalId,
         company_name: companyName,
         job_title: jobTitle,
+        salary_range: String(vueData.salaryDesc || "").trim(),
+        city: String(vueData.locationName || "").trim(),
         recruiter_name: recruiterName,
         last_msg: lastMsg,
         hr_replied: hrReplied,
@@ -1243,6 +1251,28 @@ try {
     }
     return out;
   }, ${Number(maxItems) || 60});
+
+  for (const ch of chats.slice(0, 12)) {
+    if (ch.job_title && ch.salary_range) continue;
+    await page.click(".user-list .friend-content >> nth=" + ch.domIdx, { label: "read chat header job info" }).catch(() => {});
+    await page.waitForTimeout(750);
+    const hdr = await page.evaluate(() => {
+      const box = document.querySelector(".chat-position-content, .position-main");
+      if (!box) return {};
+      const vue = box.__vue__ || box.closest(".position-main")?.__vue__ || {};
+      const src = vue._props?.data || vue.data || vue.positionInfo || {};
+      return {
+        job_title: (box.querySelector(".position-name")?.innerText || src.positionName || "").trim(),
+        salary_range: (box.querySelector(".salary")?.innerText || src.salaryDesc || "").trim(),
+        city: (box.querySelector(".city")?.innerText || src.locationName || "").trim(),
+        external_id: String(src.encryptJobId || "").trim(),
+      };
+    }).catch(() => ({}));
+    if (hdr.job_title) ch.job_title = hdr.job_title;
+    if (hdr.salary_range) ch.salary_range = hdr.salary_range;
+    if (hdr.city) ch.city = hdr.city;
+    if (hdr.external_id && !ch.external_id) ch.external_id = hdr.external_id;
+  }
 
   await task.finish({ keep: [] });
   console.log("RESULT_JSON:" + JSON.stringify({ status: "OK", chats }));

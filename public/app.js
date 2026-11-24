@@ -561,7 +561,7 @@ function getFilteredSortedJobs() {
     } else if (state.activeFilter === "CONTACTED") {
       if (!CONTACTED_STATUSES.has(j.status)) return false;
     } else {
-      if (isFiltered) return false;
+      if ((j.filter_status || "PASS") !== "PASS") return false;
       if (state.activeFilter === "SALARY_IDEAL" && !j.match?.salary_fit?.highlighted) return false;
     }
     if (state.commuteMaxMin !== "all") {

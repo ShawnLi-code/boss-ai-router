@@ -1309,8 +1309,27 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
           return sendJson(res, resSync.taskSpaceId ? 202 : 200, { ...resSync, syncedCount, updatedCount, state: buildStatePayload() });
         }
         for (const ch of resSync.chats || []) {
-          const mj = pickBestMatchedJobForChat(allJobs, existingLogs, ch, pid);
+          let mj = pickBestMatchedJobForChat(allJobs, existingLogs, ch, pid);
+          if (!mj && ch.company_name) {
+            const synthExtId = ch.external_id || `boss-chat::${ch.company_name}::${ch.recruiter_name || "HR"}`;
+            mj = upsertJob({
+              external_id: synthExtId,
+              job_title: ch.job_title || `${ch.recruiter_name || "HR"} 沟通岗位`,
+              company_name: ch.company_name,
+              salary_range: ch.salary_range || "",
+              city: ch.city || "",
+              recruiter_name: ch.recruiter_name || "",
+              job_url: ch.external_id ? `https://www.zhipin.com/job_detail/${ch.external_id}.html` : "https://www.zhipin.com/web/geek/chat",
+              source_profile_id: pid,
+              assigned_profile_id: pid,
+              filter_status: "CHAT_ONLY",
+              filter_reason: "来自Boss聊天同步（非本地巡检岗）",
+              status: ch.hr_replied ? "REPLIED" : "DELIVERED",
+            });
+            allJobs.unshift(mj);
+          }
           if (!mj) continue;
+          const titlePatch = ch.job_title && mj.filter_status === "CHAT_ONLY" && ch.job_title !== mj.job_title ? ch.job_title : undefined;
           const matchedJobs = [mj];
           for (const mjItem of matchedJobs) {
             const existingRow = existingLogs.find((l) => l.job_id === mj.id && l.status === "DELIVERED");
@@ -1333,14 +1352,18 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
               else if (ch.hr_replied && !prevMsgs.some((m) => m.sender === "ME")) inferredStage = "NEW_GREET";
               else inferredStage = "CHATTING";
             }
-            if (statusChanged || nextMsgs.length !== prevMsgs.length || unreadChanged || inferredStage !== (mj.boss_stage || "")) {
+            if (statusChanged || nextMsgs.length !== prevMsgs.length || unreadChanged || inferredStage !== (mj.boss_stage || "") || titlePatch) {
               updateJobRouting(mj.id, {
                 assigned_profile_id: pid,
+                job_title: titlePatch,
+                salary_range: mj.filter_status === "CHAT_ONLY" ? ch.salary_range : undefined,
+                city: mj.filter_status === "CHAT_ONLY" ? ch.city : undefined,
                 status: statusChanged ? nextStatus : undefined,
                 chat_messages: nextMsgs.length !== prevMsgs.length ? nextMsgs : undefined,
                 boss_unread_count: unreadCnt,
                 boss_stage: inferredStage,
               });
+              if (titlePatch) mj.job_title = titlePatch;
             }
             const detailText = `从 Boss 历史聊天同步：${ch.recruiter_name || "HR"}${ch.hr_replied ? "（HR已回复）" : ""}${lastText ? ` · 最近消息「${lastText.slice(0, 40)}」` : ""}`;
             if (!existingRow) {

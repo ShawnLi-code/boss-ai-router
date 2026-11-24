@@ -759,6 +759,9 @@ export function updateJobRouting(id, patch) {
     UPDATE jobs SET
       manual_track = COALESCE(?, manual_track),
       assigned_profile_id = COALESCE(?, assigned_profile_id),
+      job_title = COALESCE(NULLIF(?, ''), job_title),
+      salary_range = COALESCE(NULLIF(?, ''), salary_range),
+      city = COALESCE(NULLIF(?, ''), city),
       custom_greeting = COALESCE(?, custom_greeting),
       status = COALESCE(?, status),
       notes = COALESCE(?, notes),
@@ -777,6 +780,9 @@ export function updateJobRouting(id, patch) {
   `).run(
     patch.manual_track ?? null,
     patch.assigned_profile_id ?? null,
+    patch.job_title ?? null,
+    patch.salary_range ?? null,
+    patch.city ?? null,
     patch.custom_greeting ?? null,
     patch.status ?? null,
     patch.notes ?? null,
@@ -916,14 +922,31 @@ export function pickBestMatchedJobForChat(allJobs = [], existingLogs = [], chat 
     if (exactExt) return exactExt;
   }
   const cRoot = normalizeCompanyRoot(chat.company_name);
+  const chatTitle = String(chat.job_title || "").trim();
+
   let candidates = allJobs.filter((j) => {
+    // 关键：若会话和本地岗位都有各自的 external_id 且不相等，绝不强行张冠李戴
+    if (chat.external_id && j.external_id && j.external_id !== chat.external_id) {
+      return false;
+    }
+    let sameCompany = false;
     if (chat.company_name) {
-      if (j.company_name === chat.company_name) return true;
-      if (cRoot && j.normalized_company && (j.normalized_company === cRoot || j.normalized_company.includes(cRoot) || cRoot.includes(j.normalized_company))) {
-        return true;
+      if (j.company_name === chat.company_name) sameCompany = true;
+      else if (cRoot && j.normalized_company && (j.normalized_company === cRoot || j.normalized_company.includes(cRoot) || cRoot.includes(j.normalized_company))) {
+        sameCompany = true;
+      }
+    } else if (chat.raw_text && j.company_name && chat.raw_text.includes(j.company_name)) {
+      sameCompany = true;
+    }
+    if (!sameCompany) return false;
+    if (chatTitle && j.job_title) {
+      const a = j.job_title.toLowerCase();
+      const b = chatTitle.toLowerCase();
+      if (!(a === b || a.includes(b) || b.includes(a))) {
+        return false;
       }
     }
-    return Boolean(chat.raw_text && j.company_name && chat.raw_text.includes(j.company_name));
+    return true;
   });
   if (candidates.length === 0) return null;
 
@@ -938,7 +961,6 @@ export function pickBestMatchedJobForChat(allJobs = [], existingLogs = [], chat 
     if (found) return found;
   }
 
-  const chatTitle = String(chat.job_title || "").trim();
   const scored = candidates.map((j) => {
     let score = (j.match_score || 0) * 0.1;
     if (j.source_profile_id === profileId) score += 15;
@@ -1064,6 +1086,7 @@ export function getScrapeTelemetry() {
       SUM(CASE WHEN filter_status = 'PASS' THEN 1 ELSE 0 END) as kept_count,
       SUM(CASE WHEN filter_status = 'FILTERED' THEN 1 ELSE 0 END) as filtered_count
     FROM jobs
+    WHERE filter_status IN ('PASS', 'FILTERED')
     GROUP BY date(created_at, 'localtime')
     ORDER BY run_date DESC
   `).all();
@@ -1075,11 +1098,12 @@ export function getScrapeTelemetry() {
       SUM(CASE WHEN filter_status = 'PASS' THEN 1 ELSE 0 END) as kept,
       SUM(CASE WHEN filter_status = 'FILTERED' THEN 1 ELSE 0 END) as filtered
     FROM jobs
+    WHERE filter_status IN ('PASS', 'FILTERED')
     GROUP BY keyword
     ORDER BY kept DESC, total DESC
   `).all();
 
-  const jobs = listJobs();
+  const jobs = listJobs().filter((j) => j.filter_status !== "CHAT_ONLY");
   const eligible = jobs.filter((j) => (j.filter_status || "PASS") === "PASS");
   const todayRan = settings.last_daily_check_date === todayLocal || todayPatrolRuns.length > 0;
   const quotaFilled = Boolean(todayRan && plannedQuota > 0 && todayPatrolScanned >= plannedQuota);
