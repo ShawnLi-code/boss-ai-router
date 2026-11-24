@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import {
   PDF_DIR,
   PROJECT_ROOT,
+  RESUME_ASSETS_DIR,
   addBlacklistCompanies,
   addDeliveryLog,
   checkBlacklisted,
@@ -17,6 +18,7 @@ import {
   getJob,
   getPrimaryResume,
   getResumeByTrack,
+  getResumeImageMeta,
   getResumes,
   getScrapeTelemetry,
   getSettings,
@@ -31,6 +33,7 @@ import {
   recordPatrolRun,
   removeBlacklistCompany,
   saveResume,
+  saveResumeImageMeta,
   saveSettings,
   todayStr,
   tripProfileBreaker,
@@ -56,6 +59,7 @@ import {
   listEgoProfiles,
   openBossJobPage,
   prepareBossDelivery,
+  renderResumeImageViaEgo,
   scrapeBossJobs,
   syncResumeFromBoss,
 } from "./ego-worker.mjs";
@@ -459,6 +463,7 @@ function buildStatePayload() {
     llmConfigured: isLlmConfigured(settings),
     tracks,
     resumes: getResumes(),
+    resume_image: getResumeImageMeta(),
     jobs,
     blacklist: listBlacklist(),
     funnel: getFunnelStats(),
@@ -477,13 +482,13 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
-function readBody(req) {
+function readBody(req, maxBytes = 4 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
     req.on("data", (c) => {
       size += c.length;
-      if (size > 4 * 1024 * 1024) {
+      if (size > maxBytes) {
         reject(new Error("Payload too large"));
         req.destroy();
         return;
@@ -510,6 +515,9 @@ const MIME = {
   ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml",
   ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
   ".pdf": "application/pdf",
 };
 
@@ -699,8 +707,163 @@ const server = http.createServer(async (req, res) => {
       const key = resumeSaveMatch[1];
       const body = await readBody(req);
       const saved = saveResume(key, { ...body, source: "manual_edit" });
-      logEvent(`已保存 ${key} 轨简历母版`);
+      logEvent(`已更新简历内容`);
       return sendJson(res, 200, { ok: true, resume: saved, state: buildStatePayload() });
+    }
+
+    if (req.method === "GET" && pathname === "/api/resume-image") {
+      const meta = getResumeImageMeta();
+      if (!meta.exists || !fs.existsSync(meta.filePath)) {
+        return sendJson(res, 404, { error: "尚未配置图片简历" });
+      }
+      const ext = path.extname(meta.filePath).toLowerCase();
+      const mime = ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".webp" ? "image/webp" : "image/png";
+      res.writeHead(200, {
+        "Content-Type": mime,
+        "Cache-Control": "no-cache",
+      });
+      fs.createReadStream(meta.filePath).pipe(res);
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/resume-assets/source-pdf") {
+      const pdfFile = path.join(RESUME_ASSETS_DIR, "resume-source.pdf");
+      if (!fs.existsSync(pdfFile)) {
+        return sendJson(res, 404, { error: "尚未保存源 PDF 简历" });
+      }
+      res.writeHead(200, {
+        "Content-Type": "application/pdf",
+        "Cache-Control": "no-cache",
+      });
+      fs.createReadStream(pdfFile).pipe(res);
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/resume-assets/pdf-renderer") {
+      const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>body{margin:0;background:#fff;}</style></head><body>
+<script type="module">
+const SOURCES = [
+  ["https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.mjs", "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.worker.min.mjs"],
+  ["https://unpkg.com/pdfjs-dist@4.2.67/build/pdf.min.mjs", "https://unpkg.com/pdfjs-dist@4.2.67/build/pdf.worker.min.mjs"]
+];
+async function run() {
+  let pdfjs = null;
+  for (const [libUrl, workerUrl] of SOURCES) {
+    try {
+      pdfjs = await import(libUrl);
+      pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+      break;
+    } catch {}
+  }
+  if (!pdfjs) throw new Error("PDF.js CDN unreachable");
+  const resp = await fetch("/api/resume-assets/source-pdf?t=" + Date.now());
+  if (!resp.ok) throw new Error("Source PDF missing");
+  const buf = await resp.arrayBuffer();
+  const doc = await pdfjs.getDocument({ data: buf }).promise;
+  const scale = 2.4;
+  const pageCanvases = [];
+  let totalH = 0;
+  let maxW = 0;
+  for (let p = 1; p <= doc.numPages; p++) {
+    const page = await doc.getPage(p);
+    const vp = page.getViewport({ scale });
+    const c = document.createElement("canvas");
+    c.width = Math.ceil(vp.width);
+    c.height = Math.ceil(vp.height);
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, c.width, c.height);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    pageCanvases.push(c);
+    maxW = Math.max(maxW, c.width);
+    totalH += c.height + (p > 1 ? 16 : 0);
+  }
+  const out = document.createElement("canvas");
+  out.width = maxW;
+  out.height = totalH;
+  const octx = out.getContext("2d");
+  octx.fillStyle = "#ffffff";
+  octx.fillRect(0, 0, out.width, out.height);
+  let y = 0;
+  for (let i = 0; i < pageCanvases.length; i++) {
+    if (i > 0) y += 16;
+    octx.drawImage(pageCanvases[i], Math.floor((maxW - pageCanvases[i].width) / 2), y);
+    y += pageCanvases[i].height;
+  }
+  window.__PDF_PNG_WIDTH = out.width;
+  window.__PDF_PNG_HEIGHT = out.height;
+  window.__PDF_PNG_DATA_URL = out.toDataURL("image/png");
+  window.__PDF_PNG_READY = true;
+}
+run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
+</script></body></html>`;
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
+      return;
+    }
+
+    if (req.method === "POST" && pathname === "/api/resume-assets/upload") {
+      const body = await readBody(req, 25 * 1024 * 1024);
+      const rawName = String(body.filename || "resume.pdf").trim();
+      const b64 = String(body.dataBase64 || "").replace(/^data:[^;]+;base64,/, "");
+      if (!b64) return sendJson(res, 400, { error: "未收到文件内容" });
+      const buf = Buffer.from(b64, "base64");
+      const ext = path.extname(rawName).toLowerCase();
+
+      if ([".png", ".jpg", ".jpeg", ".webp"].includes(ext)) {
+        const targetImgName = ext === ".jpg" || ext === ".jpeg" ? "resume-image.jpg" : "resume-image.png";
+        const outImg = path.join(RESUME_ASSETS_DIR, targetImgName);
+        fs.writeFileSync(outImg, buf);
+        const meta = saveResumeImageMeta({
+          source_name: rawName,
+          image_file: targetImgName,
+          bytes: buf.length,
+        });
+        logEvent(`已上传图片简历：${rawName}`);
+        return sendJson(res, 200, { ok: true, resume_image: meta, state: buildStatePayload() });
+      }
+
+      if (ext === ".pdf") {
+        const srcPdf = path.join(RESUME_ASSETS_DIR, "resume-source.pdf");
+        const outPng = path.join(RESUME_ASSETS_DIR, "resume-image.png");
+        fs.writeFileSync(srcPdf, buf);
+        const rendered = await renderResumeImageViaEgo({
+          pdfRenderUrl: `http://127.0.0.1:${PORT}/api/resume-assets/pdf-renderer`,
+          fallbackHtmlUrl: `http://127.0.0.1:${PORT}/resume-print.html`,
+          outputPath: outPng,
+          onLog: (m) => logEvent(m),
+        });
+        const meta = saveResumeImageMeta({
+          source_name: rawName,
+          image_file: "resume-image.png",
+          bytes: rendered.bytes,
+          width: rendered.width,
+          height: rendered.height,
+        });
+        return sendJson(res, 200, { ok: true, resume_image: meta, state: buildStatePayload() });
+      }
+
+      return sendJson(res, 400, { error: "仅支持 PDF、PNG、JPG 格式文件" });
+    }
+
+    if (req.method === "POST" && pathname === "/api/resume-assets/generate-from-online") {
+      const outPng = path.join(RESUME_ASSETS_DIR, "resume-image.png");
+      const srcPdf = path.join(RESUME_ASSETS_DIR, "resume-source.pdf");
+      const hasPdf = fs.existsSync(srcPdf);
+      const rendered = await renderResumeImageViaEgo({
+        pdfRenderUrl: hasPdf ? `http://127.0.0.1:${PORT}/api/resume-assets/pdf-renderer` : "",
+        fallbackHtmlUrl: `http://127.0.0.1:${PORT}/resume-print.html`,
+        outputPath: outPng,
+        onLog: (m) => logEvent(m),
+      });
+      const meta = saveResumeImageMeta({
+        source_name: hasPdf ? "简历附件转高清长图.png" : "在线简历生成长图.png",
+        image_file: "resume-image.png",
+        bytes: rendered.bytes,
+        width: rendered.width,
+        height: rendered.height,
+      });
+      return sendJson(res, 200, { ok: true, resume_image: meta, state: buildStatePayload() });
     }
 
     if (req.method === "POST" && pathname === "/api/jobs/import") {
@@ -1107,40 +1270,55 @@ const server = http.createServer(async (req, res) => {
       }
 
       const todayCount = countTodayDeliveries(profileId);
-      if (todayCount >= dailyLimit && !body.ignoreLimit) {
+      const onlySendImage = Boolean(body.onlySendImage);
+      if (!onlySendImage && todayCount >= dailyLimit && !body.ignoreLimit) {
         return sendJson(res, 429, {
           error: `防封号保护：${profileLabel} (${profileId}) 今日已投递 ${todayCount}/${dailyLimit} 次，已达安全上限。`,
         });
       }
 
-      const greetingText = String(body.greetingText || job.custom_greeting || "").trim();
+      const greetingText = String(body.greetingText ?? job.custom_greeting ?? "").trim();
+      const autoSend = body.autoSend !== undefined ? Boolean(body.autoSend) : (settings.deliver_auto_send !== "false");
+      const sendImageResume = onlySendImage
+        ? true
+        : (body.sendImageResume !== undefined ? Boolean(body.sendImageResume) : (settings.deliver_send_image !== "false"));
+      const resumeMeta = getResumeImageMeta();
+
       const deliveryRes = await prepareBossDelivery({
         profileId,
         jobUrl: job.job_url,
         companyName: job.company_name,
         jobTitle: job.job_title,
         greetingText,
-        autoSend: Boolean(body.autoSend),
+        autoSend,
+        sendImageResume,
+        imagePath: resumeMeta.exists ? resumeMeta.filePath : "",
+        onlySendImage,
         onLog: (m) => logEvent(m),
       });
 
-      const logStatus =
-        deliveryRes.status === "SENT"
-          ? "DELIVERED"
-          : deliveryRes.status === "PREPARED_HANDOFF"
-            ? "PREPARED"
-            : "VERIFICATION";
+      const isSent = deliveryRes.status === "SENT"
+        || deliveryRes.status === "SENT_WITH_IMAGE"
+        || deliveryRes.status === "SENT_TEXT_PENDING_IMAGE";
 
-      addDeliveryLog({
-        job_id: job.id,
-        company_name: job.company_name,
-        track_key: trackKey,
-        profile_id: profileId,
-        action: body.autoSend ? "AUTO_SEND" : "PREFILL_HANDOFF",
-        greeting_text: greetingText,
-        status: logStatus,
-        detail: deliveryRes.message || "",
-      });
+      const logStatus = isSent
+        ? "DELIVERED"
+        : deliveryRes.status === "PREPARED_HANDOFF"
+          ? "PREPARED"
+          : "VERIFICATION";
+
+      if (!onlySendImage) {
+        addDeliveryLog({
+          job_id: job.id,
+          company_name: job.company_name,
+          track_key: trackKey,
+          profile_id: profileId,
+          action: autoSend ? "AUTO_SEND" : "PREFILL_HANDOFF",
+          greeting_text: greetingText,
+          status: logStatus,
+          detail: deliveryRes.message || "",
+        });
+      }
 
       if (deliveryRes.status === "VERIFICATION_REQUIRED") {
         tripProfileBreaker(profileId, "投递沟通时触发安全验证");
@@ -1148,11 +1326,23 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 202, { ...deliveryRes, state: buildStatePayload() });
       }
 
+      const prevTailored = job.tailored_resume || {};
+      const nextImageDelivery = deliveryRes.imageSent
+        ? "SENT"
+        : deliveryRes.status === "SENT_TEXT_PENDING_IMAGE"
+          ? "PENDING_REPLY"
+          : (prevTailored.image_delivery || "NONE");
+
       updateJobRouting(job.id, {
         manual_track: trackKey,
         assigned_profile_id: profileId,
-        custom_greeting: greetingText,
-        status: deliveryRes.status === "SENT" ? "DELIVERED" : "PREPARED",
+        custom_greeting: greetingText || job.custom_greeting,
+        status: isSent ? (job.status === "REPLIED" || job.status === "INTERVIEW" ? job.status : "DELIVERED") : "PREPARED",
+        tailored_resume: {
+          ...prevTailored,
+          image_delivery: nextImageDelivery,
+          image_blocked_reason: deliveryRes.imageBlockedReason || "",
+        },
       });
 
       return sendJson(res, 200, { ok: true, delivery: deliveryRes, state: buildStatePayload() });

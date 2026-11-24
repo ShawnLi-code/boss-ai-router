@@ -4,7 +4,9 @@ import { evaluateJobRisk, shouldTriggerWebSearch } from "../src/scoring.mjs";
 import { analyzeSearchSnippets } from "../src/websearch.mjs";
 import { DEFAULT_TARGET_ROLES, evaluateJobEligibility, evaluateSalaryFit, factGuardCheck, matchResumeToJob, parseSalaryRangeK } from "../src/matcher.mjs";
 import { calculateBikePlusMetroMetrics } from "../src/commute.mjs";
-import { db, getScrapeTelemetry, listKnownExternalIds, listPatrolRuns, normalizeCompanyRoot, recordPatrolRun } from "../src/db.mjs";
+import fs from "node:fs";
+import path from "node:path";
+import { RESUME_ASSETS_DIR, db, getResumeImageMeta, getScrapeTelemetry, listKnownExternalIds, listPatrolRuns, normalizeCompanyRoot, recordPatrolRun, saveResumeImageMeta } from "../src/db.mjs";
 import { buildBossSearchUrl } from "../src/ego-worker.mjs";
 import { compareSemver } from "../src/updater.mjs";
 
@@ -563,6 +565,29 @@ test("Boss原生搜索筛选URL构建：全职1901与1-5年/不限经验参数�
   assert.ok(url.includes("jobType=1901"));
   assert.ok(url.includes("experience=101%2C103%2C104%2C105"));
   assert.ok(url.includes("salary=405"));
+});
+
+test("图片简历元数据存取：支持读取与恢复 meta.json", () => {
+  const metaFile = path.join(RESUME_ASSETS_DIR, "meta.json");
+  const prevMeta = fs.existsSync(metaFile) ? fs.readFileSync(metaFile, "utf8") : null;
+  const mockImg = path.join(RESUME_ASSETS_DIR, "mock-test-resume.png");
+  fs.writeFileSync(mockImg, Buffer.from("89504e470d0a1a0a", "hex"));
+  try {
+    const saved = saveResumeImageMeta({
+      source_name: "mock_candidate_resume.pdf",
+      image_file: "mock-test-resume.png",
+      width: 1400,
+      height: 1980,
+    });
+    assert.equal(saved.exists, true);
+    assert.equal(saved.filename, "mock_candidate_resume.pdf");
+    assert.equal(saved.width, 1400);
+    assert.ok(saved.url.startsWith("/api/resume-image?t="));
+  } finally {
+    try { fs.unlinkSync(mockImg); } catch {}
+    if (prevMeta !== null) fs.writeFileSync(metaFile, prevMeta, "utf8");
+    else { try { fs.unlinkSync(metaFile); } catch {} }
+  }
 });
 
 

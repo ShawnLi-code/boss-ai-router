@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Boss AI Router · 每日巡检与 JD 匹配助手</title>
+  <title>Boss AI Router · 智能选岗与一键沟通助手</title>
   <link rel="icon" type="image/png" href="/logo.png">
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -16,28 +16,28 @@
         <img src="/logo.png" alt="Boss AI Router" width="32" height="32" class="sidebar-logo">
         <div class="sidebar-brand-text">
           <span class="sidebar-title">Boss AI Router</span>
-          <span id="app-version-tag" class="sidebar-version">v0.5.0</span>
+          <span id="app-version-tag" class="sidebar-version">v0.7.0</span>
         </div>
       </div>
 
       <nav class="sidebar-nav" aria-label="工作区模块">
         <button type="button" class="nav-item" data-view="jobs" aria-current="page">
-          <span>岗位巡检与匹配</span>
+          <span>岗位挑选与打招呼</span>
           <span class="nav-count" id="nav-jobs-count">0</span>
         </button>
         <button type="button" class="nav-item" data-view="resumes">
-          <span>2年简历母版</span>
+          <span>我的简历</span>
         </button>
         <button type="button" class="nav-item" data-view="funnel">
-          <span>抓取记录与统计</span>
+          <span>抓取记录与黑名单</span>
         </button>
         <button type="button" class="nav-item" data-view="settings">
-          <span>巡检计划与设置</span>
+          <span>巡检与账号设置</span>
         </button>
       </nav>
 
       <div class="sidebar-section">
-        <div class="sidebar-section-label">采集 / 投递账号额度</div>
+        <div class="sidebar-section-label">今日打招呼额度</div>
         <div class="quota-row">
           <span class="quota-name" id="side-a-label">账号 1</span>
           <span class="quota-val" id="side-a-quota">0/25</span>
@@ -47,7 +47,7 @@
           <span class="quota-val" id="side-b-quota">0/25</span>
         </div>
         <div class="patrol-mini" id="side-patrol-status">今日巡检：待执行</div>
-        <div class="patrol-mini patrol-link" id="side-scrape-retention" title="点击查看每日抓取与留存记录详情">加载中...</div>
+        <div class="patrol-mini patrol-link" id="side-scrape-retention" title="点击查看每日抓取与留存明细">加载中...</div>
       </div>
 
       <div class="sidebar-footer">
@@ -77,142 +77,149 @@
 
       <section id="verify-banner" class="alert-strip alert-warn" hidden>
         <div>
-          <strong id="verify-title">需要人工安全验证（已触发当日防封熔断）</strong>
-          <span id="verify-desc" class="alert-desc">请在 Ego 浏览器完成验证后释放控制权。</span>
+          <strong id="verify-title">需要人工安全验证（已触发当日防封保护）</strong>
+          <span id="verify-desc" class="alert-desc">请在 Ego 浏览器完成验证后点击右侧按钮。</span>
         </div>
         <div class="alert-actions">
-          <button type="button" id="verify-done-btn" class="btn btn-primary btn-xs">处理完毕</button>
+          <button type="button" id="verify-done-btn" class="btn btn-primary btn-xs">已完成验证</button>
           <button type="button" id="verify-dismiss-btn" class="btn btn-ghost btn-xs">收起</button>
         </div>
       </section>
 
-      <!-- VIEW 1: Master-Detail Job Workstation -->
+      <!-- VIEW 1: Streamlined Master-Detail Job Workstation -->
       <section id="view-jobs" class="view-pane">
         <header class="toolbar">
           <div class="toolbar-inputs">
-            <button type="button" id="btn-toggle-watchlist" class="btn btn-secondary btn-sm">巡检清单 (<span id="watchlist-count-label">9</span>)</button>
-            <input type="text" id="scrape-query" value="AI测试" placeholder="单关键词快采" aria-label="单关键词搜索" class="input-compact input-kw">
-            <select id="scrape-city" aria-label="城市" class="input-compact">
-              <option value="101280100">广州</option>
-              <option value="101280600">深圳</option>
-              <option value="101210100">杭州</option>
-              <option value="101010100">北京</option>
-              <option value="101020100">上海</option>
-              <option value="101270100">成都</option>
-            </select>
-            <select id="scrape-hr-active" aria-label="最低HR活跃度" class="input-compact">
-              <option value="week">本周内活跃</option>
-              <option value="3days">3日内活跃（高响应）</option>
-              <option value="today">仅今日活跃</option>
-              <option value="month">本月内活跃</option>
-              <option value="all">活跃度不限</option>
-            </select>
-            <input type="number" id="scrape-max" min="1" max="50" value="10" aria-label="每词目标新增上限" class="input-compact input-num" title="每个关键词目标新采集条数（开启 Boss 原生筛选+增量跳过，单词深度扫支持到 50 条）">
-            <select id="scrape-mode" aria-label="刷岗账号策略" class="input-compact">
-              <option value="both">双号分别刷一遍（自动去重）</option>
-              <option value="single:Profile 1">仅用 Profile 1 采集</option>
-              <option value="single:Profile 2">仅用 Profile 2 采集</option>
-            </select>
+            <button type="button" id="btn-patrol" class="btn btn-boss btn-sm">🚀 一键每日巡检</button>
+            <div class="quick-scrape-group">
+              <input type="text" id="scrape-query" value="AI测试" placeholder="输入单个岗位词快采..." aria-label="单关键词快采" class="input-compact input-kw">
+              <button type="button" id="btn-scrape" class="btn btn-secondary btn-sm">单词快采</button>
+            </div>
+            <button type="button" id="btn-toggle-watchlist" class="btn btn-ghost btn-sm">巡检词与采集条件 (<span id="watchlist-count-label">9</span>) ▾</button>
           </div>
           <div class="toolbar-actions">
-            <button type="button" id="btn-patrol" class="btn btn-primary btn-sm">一键每日巡检</button>
-            <button type="button" id="btn-scrape" class="btn btn-secondary btn-sm">单词采集</button>
-            <button type="button" id="btn-recalc-all" class="btn btn-ghost btn-sm" title="用最新2年简历重新给所有已保存岗位评分">重算全部评分</button>
-            <button type="button" id="btn-open-import" class="btn btn-ghost btn-sm">导入 JSON</button>
+            <div class="live-log-inline" aria-live="polite">
+              <span id="live-log-latest">就绪 · 选定心仪岗位即可一键发招呼语 + 高清图片简历</span>
+            </div>
           </div>
         </header>
 
-        <!-- Collapsible 9-Role Watchlist Drawer -->
+        <!-- Collapsible Patrol Options & Watchlist Drawer -->
         <div id="watchlist-drawer" class="watchlist-drawer" hidden>
+          <div class="drawer-controls-row">
+            <label class="inline-ctrl">
+              <span>城市</span>
+              <select id="scrape-city" class="input-compact">
+                <option value="101280100">广州</option>
+                <option value="101280600">深圳</option>
+                <option value="101210100">杭州</option>
+                <option value="101020100">上海</option>
+                <option value="101270100">成都</option>
+                <option value="101010100">北京</option>
+              </select>
+            </label>
+            <label class="inline-ctrl">
+              <span>HR活跃</span>
+              <select id="scrape-hr-active" class="input-compact">
+                <option value="week">本周内活跃</option>
+                <option value="3days">3日内活跃</option>
+                <option value="today">仅今日活跃</option>
+                <option value="month">本月内活跃</option>
+                <option value="all">不限</option>
+              </select>
+            </label>
+            <label class="inline-ctrl">
+              <span>每词上限</span>
+              <input type="number" id="scrape-max" min="1" max="50" value="10" class="input-compact input-num">
+            </label>
+            <label class="inline-ctrl">
+              <span>采集账号</span>
+              <select id="scrape-mode" class="input-compact">
+                <option value="both">双号轮刷（去重）</option>
+                <option value="single:Profile 1">仅用 Profile 1</option>
+                <option value="single:Profile 2">仅用 Profile 2</option>
+              </select>
+            </label>
+            <div class="drawer-extra-btns">
+              <button type="button" id="btn-calc-commute" class="btn btn-secondary btn-xs">批量测算通勤</button>
+              <button type="button" id="btn-recalc-all" class="btn btn-ghost btn-xs">重算匹配分</button>
+            </div>
+          </div>
           <div class="watchlist-head">
-            <span class="muted">勾选本次巡检包含的目标岗位方向（统一按 2 年经历主简历评估与去重保存）：</span>
+            <span class="muted">巡检目标岗位词（点击开关）：</span>
             <div class="watchlist-actions">
-              <input type="text" id="new-watchlist-kw" placeholder="新增岗位关键词..." class="input-compact" style="width:150px;">
+              <input type="text" id="new-watchlist-kw" placeholder="新增岗位词..." class="input-compact" style="width:140px;">
               <button type="button" id="btn-add-watchlist" class="btn btn-secondary btn-xs">添加</button>
-              <button type="button" id="btn-save-watchlist" class="btn btn-ghost btn-xs">保存清单为默认</button>
+              <button type="button" id="btn-save-watchlist" class="btn btn-ghost btn-xs">保存为默认</button>
             </div>
           </div>
           <div id="watchlist-chips" class="watchlist-chips"></div>
         </div>
 
         <div class="subbar">
-          <div class="segmented" role="group" aria-label="按精筛结果筛选">
-            <button type="button" class="seg-btn active" data-filter="ALL">精选测试池 <span id="cnt-all">0</span></button>
-            <button type="button" class="seg-btn" data-filter="SALARY_IDEAL">9-12K理想薪资 <span id="cnt-salary-ideal">0</span></button>
-            <button type="button" class="seg-btn" data-filter="DIRECT_APPLY">可直接投 <span id="cnt-direct">0</span></button>
-            <button type="button" class="seg-btn" data-filter="REVISE_FIRST">改微调/3-5年冲刺 <span id="cnt-revise">0</span></button>
-            <button type="button" class="seg-btn" data-filter="IDEAL_1_3">仅看 1-3年/不限 <span id="cnt-ideal">0</span></button>
+          <div class="segmented" role="group" aria-label="岗位分类筛选">
+            <button type="button" class="seg-btn active" data-filter="ALL">待看精选 <span id="cnt-all">0</span></button>
+            <button type="button" class="seg-btn" data-filter="SALARY_IDEAL">9-12K优先 <span id="cnt-salary-ideal">0</span></button>
+            <button type="button" class="seg-btn" data-filter="CONTACTED">已沟通跟进 <span id="cnt-contacted">0</span></button>
             <button type="button" class="seg-btn" data-filter="FILTERED">已过滤杂岗 <span id="cnt-filtered">0</span></button>
           </div>
           <div class="subbar-right">
-            <input type="search" id="job-search-input" placeholder="过滤岗位 / 公司 / JD" aria-label="过滤已保存岗位" class="input-compact" style="width:170px;">
-            <select id="job-commute-filter" aria-label="按通勤耗时筛选" class="input-compact">
-              <option value="all">全部同城距离</option>
-              <option value="60">仅看 ≤60 分钟通勤</option>
-              <option value="45">极近 ≤45 分钟</option>
+            <input type="search" id="job-search-input" placeholder="搜岗位 / 公司 / 关键词..." aria-label="搜索岗位" class="input-compact" style="width:175px;">
+            <select id="job-commute-filter" aria-label="按通勤筛选" class="input-compact">
+              <option value="all">通勤不限</option>
+              <option value="60">≤ 60 分钟</option>
+              <option value="45">≤ 45 分钟</option>
             </select>
             <select id="job-sort-select" aria-label="排序方式" class="input-compact">
-              <option value="match">按 9-12K 权重+匹配分</option>
-              <option value="commute">按通勤短→长</option>
-              <option value="recent">按最新采集</option>
-              <option value="risk">按背调风险低→高</option>
+              <option value="match">按匹配度优先</option>
+              <option value="commute">按通勤最近</option>
+              <option value="recent">按最新抓取</option>
             </select>
-            <button type="button" id="btn-calc-commute" class="btn btn-secondary btn-xs" title="根据居住地址测算精选岗位单车+地铁通勤耗时">测算通勤</button>
-            <button type="button" id="btn-purge-filtered" class="btn btn-ghost btn-xs" hidden>清理杂岗</button>
-            <div class="live-log-inline" aria-live="polite">
-              <span id="live-log-latest">就绪 · 默认只看 7K+ 同城测试高权重岗（9-12K 高亮提权，已拦截 &lt;7K/异地/实习/非测岗）</span>
-            </div>
+            <button type="button" id="btn-purge-filtered" class="btn btn-ghost btn-xs" hidden>清空杂岗</button>
           </div>
         </div>
 
         <div class="split-workspace">
           <!-- Left List -->
-          <div class="job-list-pane" id="job-list-pane" role="listbox" aria-label="已保存岗位列表">
-            <div class="empty-state">暂无岗位，点击上方“一键每日巡检”或“单词采集”。</div>
+          <div class="job-list-pane" id="job-list-pane" role="listbox" aria-label="岗位列表">
+            <div class="empty-state">暂无岗位，点击左上角「一键每日巡检」开始采集。</div>
           </div>
 
           <!-- Right Inspector -->
           <div class="job-inspector-pane" id="job-inspector-pane">
-            <div class="empty-state">在左侧选择一个已保存岗位，查看 5 维度匹配打分、可否直投诊断、背调风险、沟通模板并一键跳转沟通页。</div>
+            <div class="empty-state">在左侧点击任意岗位，即可查看匹配亮点、一键发送打招呼语及图片简历。</div>
           </div>
         </div>
       </section>
 
-      <!-- VIEW 2: Unified 2-Year Master Resume -->
+      <!-- VIEW 2: Boss-Style Online Resume + Image Resume Sidebar -->
       <section id="view-resumes" class="view-pane scroll-pane" hidden>
-        <div class="view-header">
-          <div>
-            <h2>两年经历主简历（统一评估基准）</h2>
-            <p class="muted">所有采集岗位均按这份 2 年经历主简历统一评估 JD 匹配度、生成微调建议与沟通模板；事实锁禁止篡改公司与时间线。</p>
-          </div>
-          <button type="button" id="btn-recalc-from-resumes" class="btn btn-secondary btn-sm">保存后重算全部岗位评分</button>
-        </div>
-        <div id="resumes-container" class="stack-sm"></div>
+        <div id="resumes-container" class="boss-resume-layout"></div>
       </section>
 
       <!-- VIEW 3: Scrape Records, Funnel & Blacklist -->
       <section id="view-funnel" class="view-pane scroll-pane" hidden>
         <div class="view-header">
           <div>
-            <h2>每日抓取记录、留存统计与黑名单</h2>
-            <p class="muted">一目了然查看每天抓了多少条、今日是否抓满、过滤规则淘汰与精选留下了多少条，以及各关键词产出。</p>
+            <h2>每日抓取统计、沟通记录与黑名单</h2>
+            <p class="muted">查看每日抓岗进度、各关键词精选留存率、近期打招呼历史与避坑黑名单公司。</p>
           </div>
-          <a class="btn btn-secondary btn-sm" href="/api/export" download>导出全量 JSON</a>
+          <a class="btn btn-secondary btn-sm" href="/api/export" download>导出备份 JSON</a>
         </div>
 
         <section class="surface-box" style="margin-bottom:14px;">
-          <h3>每日抓取额度与留存总览</h3>
+          <h3>抓取与留存总览</h3>
           <div id="patrol-kpi-strip" class="funnel-grid" style="margin-bottom:14px;"></div>
           <div class="two-col-grid">
             <div>
-              <h4 class="sub-section-title">巡检与采抓批次记录</h4>
+              <h4 class="sub-section-title">最近巡检与采集批次</h4>
               <div class="table-scroll">
                 <table class="compact-table" id="patrol-runs-table">
                   <thead>
                     <tr>
-                      <th>日期 / 模式</th>
-                      <th>扫描/目标</th>
-                      <th>新入库</th>
+                      <th>时间 / 模式</th>
+                      <th>扫描</th>
+                      <th>新增</th>
                       <th>精选留下</th>
                       <th>状态</th>
                     </tr>
@@ -220,15 +227,15 @@
                   <tbody></tbody>
                 </table>
               </div>
-              <h4 class="sub-section-title" style="margin-top:14px;">按首抓日期汇总（新抓 vs 留存）</h4>
+              <h4 class="sub-section-title" style="margin-top:14px;">按日期汇总</h4>
               <div class="table-scroll">
                 <table class="compact-table" id="daily-breakdown-table">
                   <thead>
                     <tr>
                       <th>日期</th>
                       <th>首次新抓</th>
-                      <th>规则留下</th>
-                      <th>已过滤</th>
+                      <th>精选留下</th>
+                      <th>自动过滤</th>
                     </tr>
                   </thead>
                   <tbody></tbody>
@@ -236,12 +243,12 @@
               </div>
             </div>
             <div>
-              <h4 class="sub-section-title">各关键词抓取与留存明细</h4>
+              <h4 class="sub-section-title">各岗位词产出率</h4>
               <div class="table-scroll">
                 <table class="compact-table" id="keyword-stats-table">
                   <thead>
                     <tr>
-                      <th>关键词</th>
+                      <th>岗位关键词</th>
                       <th>累计抓到</th>
                       <th>精选留下</th>
                       <th>已过滤</th>
@@ -257,22 +264,22 @@
 
         <div class="two-col-grid">
           <section class="surface-box">
-            <h3>岗位匹配与投递漏斗</h3>
+            <h3>沟通转化概览</h3>
             <div id="funnel-cards" class="funnel-grid"></div>
             <hr class="hairline">
-            <h3>近期沟通跳转与防撞车审计</h3>
+            <h3>近期打招呼记录（自动防多号撞车）</h3>
             <div class="logs-list" id="delivery-logs-list">
-              <p class="muted">暂无沟通记录。</p>
+              <p class="muted">暂无打招呼记录。</p>
             </div>
           </section>
 
           <section class="surface-box">
             <h3>企业避坑黑名单</h3>
-            <p class="muted">按主品牌归一化匹配集团/子公司，同时拦截所有账号重复触达。</p>
+            <p class="muted">拉黑后自动匹配集团/子公司名称，在岗位列表中直接拦截不予投递。</p>
             <form id="blacklist-form" class="stack-sm">
-              <textarea id="blacklist-input" rows="3" placeholder="每行一家公司名称，或用逗号分隔"></textarea>
+              <textarea id="blacklist-input" rows="3" placeholder="输入要屏蔽的公司名称，每行一家或逗号分隔"></textarea>
               <div class="right-row">
-                <button type="submit" class="btn btn-secondary btn-sm">加入黑名单并重扫</button>
+                <button type="submit" class="btn btn-secondary btn-sm">加入黑名单</button>
               </div>
             </form>
             <div id="blacklist-items" class="blacklist-pills"></div>
@@ -280,153 +287,177 @@
         </div>
       </section>
 
-      <!-- VIEW 4: Settings, Patrol Schedule & Updates -->
+      <!-- VIEW 4: Clean Settings with Collapsible Advanced Section -->
       <section id="view-settings" class="view-pane scroll-pane" hidden>
         <div class="view-header">
           <div>
-            <h2>巡检计划、账号绑定与 GitHub 更新</h2>
-            <p class="muted">配置每日巡检默认目标岗位、两个 Ego 采集/发送账号的当日限额、防封延迟与可选大模型。</p>
+            <h2>巡检与账号设置</h2>
+            <p class="muted">绑定你的两个 Boss 账号、设置通勤起点与薪资范围；低频防封及模型参数已折叠在底部。</p>
           </div>
         </div>
         <div class="two-col-grid">
           <section class="surface-box">
-            <h3>Ego 账号与当日熔断状态</h3>
-            <p class="muted">两个账号可分别独立刷岗扩充岗位池，发送沟通时可任选一个账号跳转。</p>
+            <h3>Boss 账号绑定与今日状态</h3>
+            <p class="muted">两个账号可同时轮刷扩充岗位池；打招呼时自动选用有额度的账号并防止同公司重复触达。</p>
             <div id="tracks-config-list" class="stack-sm"></div>
           </section>
+
           <section class="surface-box">
-            <h3>每日巡检计划、防封与 LLM 配置</h3>
-            <form id="settings-form" class="form-grid">
-              <label class="field" style="grid-column: 1 / -1;">
-                <span>每日巡检目标岗位（逗号或换行分隔）</span>
-                <textarea name="watchlist_text" rows="3" placeholder="AI应用测试, AI测试, 软件测试, 测试工程师, AI评测, 大模型测试工程师, 模型评测工程师, AI训练师, 提示词工程师"></textarea>
-              </label>
-              <label class="field">
-                <span>我的居住地址（仅存本机，测算单车+地铁）</span>
-                <input type="text" name="home_address" placeholder="例如：广州市天河区XX街道XX号">
-              </label>
-              <label class="field">
-                <span>居住城市</span>
-                <input type="text" name="home_city" placeholder="广州">
-              </label>
-              <label class="field">
-                <span>应用打开时自动每日巡检</span>
-                <select name="daily_check_enabled">
-                  <option value="true">开启（每日到点自动发起一次低速巡检）</option>
-                  <option value="false">关闭（仅手动点击一键巡检）</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>每日每词目标新增条数 (1-25，增量跳过已抓)</span>
-                <input type="number" name="scrape_max_jobs" min="1" max="25" value="10">
-              </label>
-              <label class="field">
-                <span>每日自动巡检时间</span>
-                <input type="time" name="daily_check_time" value="09:30">
-              </label>
-              <label class="field">
-                <span>默认刷岗策略</span>
-                <select name="scan_mode">
-                  <option value="both">双号分别刷一遍（发现更多岗位+去重）</option>
-                  <option value="single">仅使用单号刷岗</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>经验年限筛选规则</span>
-                <select name="filter_exp_mode">
-                  <option value="prefer_1_3_allow_3_5">优先 1-3年/不限，测试强相关可留 3-5年</option>
-                  <option value="1_3_only">严格仅留 1-3年/不限/1年以内</option>
-                  <option value="all">不过滤经验年限</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>过滤实习 / 校招 / 兼职</span>
-                <select name="filter_exclude_intern">
-                  <option value="true">开启（自动归入已过滤杂岗）</option>
-                  <option value="false">关闭</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>过滤产品 / 开发 / 硬件等非测试岗</span>
-                <select name="filter_exclude_non_qa">
-                  <option value="true">开启（仅留软件测试/AI评测/工程向提示词）</option>
-                  <option value="false">关闭</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>最低起薪门槛 (K，低于此值过滤)</span>
-                <input type="number" name="filter_min_salary_k" min="0" max="30" step="1" value="7">
-              </label>
-              <label class="field">
-                <span>期望高权重薪资下限 (K)</span>
-                <input type="number" name="target_salary_min_k" min="5" max="50" step="1" value="9">
-              </label>
-              <label class="field">
-                <span>期望高权重薪资上限 (K)</span>
-                <input type="number" name="target_salary_max_k" min="5" max="80" step="1" value="12">
-              </label>
-              <label class="field">
-                <span>过滤明确跨城 / 异地工作地岗位</span>
-                <select name="filter_exclude_remote">
-                  <option value="true">开启（拦截 base 外省市/非当前搜城）</option>
-                  <option value="false">关闭</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>Boss 搜索页原厂前置筛选</span>
-                <select name="boss_native_filter">
-                  <option value="true">开启（全职 + 经验1-5年/不限前置，直击目标池）</option>
-                  <option value="false">关闭（全量抓完本地再筛选）</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>Boss 搜索页原厂薪资段筛选</span>
-                <select name="boss_salary_filter">
-                  <option value="">不限（由本地精确过滤 7K+、高亮 9-12K）</option>
-                  <option value="405">仅扫 Boss 10-20K 档位</option>
-                  <option value="404">仅扫 Boss 5-10K 档位</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>自动触发联网背调补查</span>
-                <select name="auto_web_search">
-                  <option value="true">开启（规模 &ge;100 或 &ge;A轮）</option>
-                  <option value="false">关闭（仅手动补查）</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>最小拟人间隔 (ms, &ge;3000)</span>
-                <input type="number" name="delay_min_ms" min="3000" max="20000" value="4500">
-              </label>
-              <label class="field">
-                <span>最大拟人间隔 (ms)</span>
-                <input type="number" name="delay_max_ms" min="4000" max="30000" value="8500">
-              </label>
-              <label class="field">
-                <span>启动时自动检查 GitHub 更新</span>
-                <select name="auto_check_update">
-                  <option value="true">开启</option>
-                  <option value="false">关闭</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>GitHub 更新源仓库</span>
-                <input type="text" name="github_repo" placeholder="ShawnLi-code/boss-ai-router">
-              </label>
-              <label class="field">
-                <span>可选 AI Base URL (OpenAI兼容)</span>
-                <input type="url" name="llm_base_url" placeholder="https://api.deepseek.com/v1（可留空）">
-              </label>
-              <label class="field">
-                <span>可选 AI 模型名</span>
-                <input type="text" name="llm_model" placeholder="deepseek-chat">
-              </label>
-              <label class="field">
-                <span>可选 AI API Key（仅存本机）</span>
-                <input type="password" name="llm_api_key" placeholder="留空表示不修改">
-              </label>
+            <h3>日常巡检与打招呼偏好</h3>
+            <form id="settings-form" class="stack-sm">
+              <div class="form-grid">
+                <label class="field" style="grid-column: 1 / -1;">
+                  <span>每日巡检目标岗位词（顿号、逗号或换行分隔）</span>
+                  <textarea name="watchlist_text" rows="2" placeholder="AI应用测试、AI测试、软件测试、测试工程师、大模型测试工程师"></textarea>
+                </label>
+                <label class="field">
+                  <span>我的居住地址（测算单车+地铁）</span>
+                  <input type="text" name="home_address" placeholder="如：广州市天河区XX地铁站附近">
+                </label>
+                <label class="field">
+                  <span>所在城市</span>
+                  <input type="text" name="home_city" placeholder="广州">
+                </label>
+                <label class="field">
+                  <span>最低起薪过滤门槛 (K)</span>
+                  <input type="number" name="filter_min_salary_k" min="0" max="30" step="1" value="7">
+                </label>
+                <label class="field">
+                  <span>重点高亮薪资范围 (K)</span>
+                  <div class="range-inline">
+                    <input type="number" name="target_salary_min_k" min="5" max="50" value="9" aria-label="理想薪资下限">
+                    <span class="muted">~</span>
+                    <input type="number" name="target_salary_max_k" min="5" max="80" value="12" aria-label="理想薪资上限">
+                  </div>
+                </label>
+                <label class="field">
+                  <span>点击「一键打招呼」默认行为</span>
+                  <select name="deliver_auto_send">
+                    <option value="true">全自动发出招呼语 + 图片简历</option>
+                    <option value="false">半自动（填好内容停在聊天页由我点发送）</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>默认顺带发送图片简历</span>
+                  <select name="deliver_send_image">
+                    <option value="true">开启（能发图时自动发出高清图片简历）</option>
+                    <option value="false">关闭（仅发送文字招呼语）</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>每日定时自动巡检</span>
+                  <select name="daily_check_enabled">
+                    <option value="true">开启</option>
+                    <option value="false">关闭（仅手动点巡检）</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>每日自动巡检时间</span>
+                  <input type="time" name="daily_check_time" value="09:30">
+                </label>
+              </div>
+
+              <details class="advanced-settings">
+                <summary>展开高级筛选规则、防封间隔与可选 AI 模型接口</summary>
+                <div class="form-grid" style="margin-top:12px;">
+                  <label class="field">
+                    <span>每词单次目标新增条数 (1-25)</span>
+                    <input type="number" name="scrape_max_jobs" min="1" max="25" value="10">
+                  </label>
+                  <label class="field">
+                    <span>默认刷岗模式</span>
+                    <select name="scan_mode">
+                      <option value="both">双号分别刷一遍</option>
+                      <option value="single">仅单号刷岗</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>经验年限要求过滤</span>
+                    <select name="filter_exp_mode">
+                      <option value="prefer_1_3_allow_3_5">优先 1-3年/不限，强相关可留 3-5年</option>
+                      <option value="1_3_only">严格仅留 1-3年/不限</option>
+                      <option value="all">不限年限</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>过滤实习 / 兼职</span>
+                    <select name="filter_exclude_intern">
+                      <option value="true">开启</option>
+                      <option value="false">关闭</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>过滤非测试杂岗（开发/产品/销售等）</span>
+                    <select name="filter_exclude_non_qa">
+                      <option value="true">开启</option>
+                      <option value="false">关闭</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>过滤跨城 / 异地岗位</span>
+                    <select name="filter_exclude_remote">
+                      <option value="true">开启</option>
+                      <option value="false">关闭</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Boss 搜索页原生筛选前置</span>
+                    <select name="boss_native_filter">
+                      <option value="true">开启（全职 + 1-5年/不限）</option>
+                      <option value="false">关闭</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>Boss 原生薪资档位限定</span>
+                    <select name="boss_salary_filter">
+                      <option value="">不限（本地按门槛精筛）</option>
+                      <option value="405">仅扫 10-20K</option>
+                      <option value="404">仅扫 5-10K</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>大公司自动联网查背调与口碑</span>
+                    <select name="auto_web_search">
+                      <option value="true">开启</option>
+                      <option value="false">关闭（仅手动点尽调）</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>启动时自动检查新版本</span>
+                    <select name="auto_check_update">
+                      <option value="true">开启</option>
+                      <option value="false">关闭</option>
+                    </select>
+                  </label>
+                  <label class="field">
+                    <span>最小拟人间隔 (ms, ≥3000)</span>
+                    <input type="number" name="delay_min_ms" min="3000" max="20000" value="4500">
+                  </label>
+                  <label class="field">
+                    <span>最大拟人间隔 (ms)</span>
+                    <input type="number" name="delay_max_ms" min="4000" max="30000" value="8500">
+                  </label>
+                  <label class="field">
+                    <span>GitHub 更新仓库</span>
+                    <input type="text" name="github_repo" placeholder="ShawnLi-code/boss-ai-router">
+                  </label>
+                  <label class="field">
+                    <span>AI Base URL（可选，增强话术）</span>
+                    <input type="url" name="llm_base_url" placeholder="https://api.deepseek.com/v1">
+                  </label>
+                  <label class="field">
+                    <span>AI 模型名称</span>
+                    <input type="text" name="llm_model" placeholder="deepseek-chat">
+                  </label>
+                  <label class="field">
+                    <span>AI API Key（仅存本机）</span>
+                    <input type="password" name="llm_api_key" placeholder="留空表示不修改">
+                  </label>
+                </div>
+              </details>
+
               <div class="form-actions">
-                <button type="submit" class="btn btn-primary btn-sm">保存配置</button>
+                <button type="submit" class="btn btn-boss btn-sm">保存设置</button>
               </div>
             </form>
           </section>
@@ -435,23 +466,37 @@
     </main>
   </div>
 
-  <!-- Import Jobs Dialog -->
-  <dialog id="import-modal" closedby="any" aria-labelledby="import-modal-title">
-    <div class="modal-shell modal-shell-sm">
+  <!-- Boss-Style Resume Section Edit Modal -->
+  <dialog id="resume-edit-modal" closedby="any" aria-labelledby="resume-edit-modal-title">
+    <div class="modal-shell">
       <header class="modal-head">
-        <h2 id="import-modal-title">导入单条或多条 Boss 岗位信息</h2>
+        <h1 id="resume-edit-modal-title" class="modal-title-h1">编辑简历模块</h1>
         <form method="dialog">
-          <button type="submit" class="btn btn-ghost btn-xs" value="close">关闭</button>
+          <button type="submit" class="btn btn-ghost btn-xs" value="cancel">关闭</button>
         </form>
       </header>
-      <form id="import-form" class="stack-sm modal-pad">
-        <p class="muted">支持 JSON 数组或单条对象（<code>company_name, scale, financing, industry, recruiter_title, salary_range, jd_text</code>）。</p>
-        <textarea id="import-json-input" rows="10" placeholder='[{"company_name":"示例科技","job_title":"AI测试工程师","scale":"100-499人","financing":"A轮","recruiter_title":"测试经理","jd_text":"负责RAG评测..."}]'></textarea>
+      <form id="resume-edit-form" class="stack-sm modal-pad">
+        <div id="resume-edit-fields" class="stack-sm"></div>
         <div class="right-row">
-          <button type="button" id="btn-fill-sample-jobs" class="btn btn-ghost btn-sm">填入 3 条示例</button>
-          <button type="submit" class="btn btn-primary btn-sm">解析并评估</button>
+          <button type="button" id="resume-edit-cancel" class="btn btn-ghost btn-sm">取消</button>
+          <button type="submit" class="btn btn-boss btn-sm">保存修改</button>
         </div>
       </form>
+    </div>
+  </dialog>
+
+  <!-- Full-size Image Resume Lightbox Modal -->
+  <dialog id="image-preview-modal" closedby="any" aria-labelledby="image-preview-title">
+    <div class="modal-shell modal-shell-lg">
+      <header class="modal-head">
+        <h1 id="image-preview-title" class="modal-title-h1">高清图片简历预览（打招呼自动发送此图）</h1>
+        <form method="dialog">
+          <button type="submit" class="btn btn-ghost btn-xs" value="close" autofocus>关闭</button>
+        </form>
+      </header>
+      <div class="modal-pad image-lightbox-body">
+        <img id="image-preview-full" src="" alt="图片简历大图预览">
+      </div>
     </div>
   </dialog>
 
@@ -459,9 +504,9 @@
   <dialog id="update-modal" closedby="any" aria-labelledby="update-modal-title">
     <div class="modal-shell modal-shell-sm">
       <header class="modal-head">
-        <h2 id="update-modal-title">GitHub 更新检测</h2>
+        <h1 id="update-modal-title" class="modal-title-h1">软件版本更新</h1>
         <form method="dialog">
-          <button type="submit" class="btn btn-ghost btn-xs" value="close">关闭</button>
+          <button type="submit" class="btn btn-ghost btn-xs" value="close" autofocus>关闭</button>
         </form>
       </header>
       <div class="modal-pad stack-sm">
@@ -472,8 +517,8 @@
           <progress id="update-progress" max="100" value="0"></progress>
         </div>
         <div class="right-row">
-          <a id="update-release-link" class="btn btn-ghost btn-sm" href="https://github.com/ShawnLi-code/boss-ai-router/releases" target="_blank" rel="noreferrer">在 GitHub 查看</a>
-          <button type="button" id="btn-apply-update" class="btn btn-primary btn-sm" hidden>立即下载并应用更新</button>
+          <a id="update-release-link" class="btn btn-ghost btn-sm" href="https://github.com/ShawnLi-code/boss-ai-router/releases" target="_blank" rel="noreferrer">前往 GitHub</a>
+          <button type="button" id="btn-apply-update" class="btn btn-boss btn-sm" hidden>立即下载并重启更新</button>
         </div>
       </div>
     </div>

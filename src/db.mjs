@@ -13,6 +13,9 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 export const PDF_DIR = path.join(DATA_DIR, "pdfs");
 fs.mkdirSync(PDF_DIR, { recursive: true });
 
+export const RESUME_ASSETS_DIR = path.join(DATA_DIR, "resume-assets");
+fs.mkdirSync(RESUME_ASSETS_DIR, { recursive: true });
+
 const DB_PATH = path.join(DATA_DIR, "router.db");
 export const db = new DatabaseSync(DB_PATH);
 db.exec("PRAGMA journal_mode = WAL;");
@@ -277,6 +280,8 @@ function seedDefaults() {
     filter_exp_mode: "prefer_1_3_allow_3_5",
     home_address: "",
     home_city: "广州",
+    deliver_auto_send: "true",
+    deliver_send_image: "true",
     daily_check_enabled: "true",
     daily_check_time: "09:30",
     last_daily_check_date: "",
@@ -480,6 +485,47 @@ export function saveResume(trackKey, payload) {
     ts
   );
   return getResumeByTrack(trackKey);
+}
+
+export function getResumeImageMeta() {
+  const metaPath = path.join(RESUME_ASSETS_DIR, "meta.json");
+  let meta = {};
+  if (fs.existsSync(metaPath)) {
+    try {
+      meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+    } catch {}
+  }
+  const imgName = meta.image_file || "resume-image.png";
+  const imgPath = path.join(RESUME_ASSETS_DIR, path.basename(imgName));
+  if (!fs.existsSync(imgPath)) {
+    return { exists: false };
+  }
+  const stat = fs.statSync(imgPath);
+  const pdfPath = path.join(RESUME_ASSETS_DIR, "resume-source.pdf");
+  const hasPdf = fs.existsSync(pdfPath);
+  return {
+    exists: true,
+    filename: meta.source_name || path.basename(imgPath),
+    image_file: path.basename(imgPath),
+    filePath: imgPath,
+    bytes: stat.size,
+    width: meta.width || null,
+    height: meta.height || null,
+    has_pdf: hasPdf,
+    updated_at: meta.updated_at || stat.mtime.toISOString(),
+    url: `/api/resume-image?t=${Math.floor(stat.mtimeMs)}`,
+    pdf_url: hasPdf ? `/api/resume-assets/source-pdf?t=${Math.floor(stat.mtimeMs)}` : null,
+  };
+}
+
+export function saveResumeImageMeta(meta = {}) {
+  const metaPath = path.join(RESUME_ASSETS_DIR, "meta.json");
+  const next = {
+    ...meta,
+    updated_at: meta.updated_at || now(),
+  };
+  fs.writeFileSync(metaPath, JSON.stringify(next, null, 2), "utf8");
+  return getResumeImageMeta();
 }
 
 export function getCompanyIntel(companyName) {

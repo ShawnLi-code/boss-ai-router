@@ -650,28 +650,29 @@ export function matchResumeToJob(job, resume, settings = {}) {
   let adviceLabel = "建议微调简历后投";
   let adviceSummary = "";
 
+  const yearsDesc = resume?.years_label || "当前简历";
   if (!eligibility.eligible) {
     applyAdvice = "LOW_FIT";
     adviceLabel = "已过滤";
     adviceSummary = eligibility.filter_reason;
   } else if (hardBlocked || matchScore < 55) {
     applyAdvice = "LOW_FIT";
-    adviceLabel = "匹配度偏低";
-    adviceSummary = `核心工作内容与 2 年测试经历重合度偏低（${matchScore}分），建议优先投高权重测试岗。`;
+    adviceLabel = "匹配偏低";
+    adviceSummary = `岗位核心职责与${yearsDesc}测试经历重合度偏低（${matchScore}分），建议优先沟通高契合测试岗。`;
   } else if (eligibility.exp_tier === "STRETCH_3_5") {
     applyAdvice = "REVISE_FIRST";
-    adviceLabel = "3-5年可冲刺·建议微调";
-    adviceSummary = `虽标 3-5 年但高度聚焦测试工作（核心命中：${matchedKeywords.slice(0, 4).join("、") || "软件测试"}），建议在个人优势与项目首句强化独立主导经验后再投。`;
+    adviceLabel = "3-5年可冲刺";
+    adviceSummary = `虽标 3-5 年但高度聚焦测试工作（命中：${matchedKeywords.slice(0, 4).join("、") || "软件测试"}），可在招呼语中突出自研平台与自动化闭环直接冲刺。`;
   } else if (coreScore >= 72 && matchScore >= 76 && missingMustHaves.length <= 2) {
     applyAdvice = "DIRECT_APPLY";
-    adviceLabel = "可直接投递";
-    adviceSummary = `1-3年黄金契合且核心工作内容（${matchedClusters.map((c) => CLUSTER_LABELS[c]).join("、") || "软件质量保障"}）高度匹配，可直接选模板跳转沟通并附简历。`;
+    adviceLabel = "强烈推荐沟通";
+    adviceSummary = `经验要求与核心工作内容（${matchedClusters.map((c) => CLUSTER_LABELS[c]).join("、") || "软件质量保障"}）高度契合，建议直接一键打招呼并附图片简历。`;
   } else {
     applyAdvice = "REVISE_FIRST";
-    adviceLabel = "建议微调简历后投";
+    adviceLabel = "匹配良好·可沟通";
     adviceSummary = missingMustHaves.length
-      ? `核心基础符合，但 JD 重点考察「${missingMustHaves.slice(0, 3).join("、")}」在简历中显式命中偏弱，建议微调侧重点导出 PDF 后再投。`
-      : `整体匹配尚可（${matchScore}分，${expNote}），建议强化量化成果后投递。`;
+      ? `核心测试栈契合，JD 额外关注「${missingMustHaves.slice(0, 3).join("、")}」，可在打招呼话术中突出相近实战快速破冰。`
+      : `整体契合度良好（${matchScore}分，${expNote}），可直接打招呼沟通具体业务场景。`;
   }
   if (eligibility.eligible && salaryFit.highlighted) {
     adviceSummary += ` 薪资「${job.salary_range}」命中 ${salaryFit.label}（权重 +${salaryFit.weight_bonus} 分）。`;
@@ -803,30 +804,30 @@ function buildTailoredSummary(job, resume, matched, missingMustHaves) {
 
 export function buildGreetingTemplates(job, resume, matchedKeywords = [], missingMustHaves = [], applyAdvice = "DIRECT_APPLY") {
   const title = job.job_title || "测试工程师";
-  const years = resume?.years_label || "2年经验";
+  const years = resume?.years_label || "1年经验";
   const highlights = matchedKeywords.length
     ? matchedKeywords.slice(0, 3).join("、")
-    : "接口自动化、Pytest及AI效果评测";
+    : "大模型评测、Python接口自动化及流式压测";
   const clip = (s) => (s.length > 120 ? `${s.slice(0, 117)}...` : s);
 
   const direct = clip(
-    `您好！看到贵司在招${title}，我有${years}相关实战，熟悉${highlights}并主导过Web与App全流程质量闭环，与岗位日常工作高度契合，可发完整简历进一步沟通！`
+    `您好！看到贵司在招${title}，我有${years}AI应用与软件测试实战，熟悉${highlights}并主导过端云与SaaS全链路质量闭环，最快一周到岗，盼发简历详聊！`
   );
 
   const tech = clip(
-    `您好！对贵司${title}很感兴趣。我过往${years}独立承接过千条用例与${highlights}建设，重视用脚本和指标定位核心缺陷与AI效果问题，期待直接沟通具体业务场景！`
+    `您好！对贵司${title}很感兴趣。过往独立负责千条评测基线、${highlights}及自研测试平台落地，擅长用自动化脚本与抓包排障闭环线上问题，期待沟通！`
   );
 
   const bridge = clip(
     applyAdvice === "REVISE_FIRST" && missingMustHaves.length
-      ? `您好！关注到贵司${title}，我有${years}软件测试与${highlights}实战底座，对${missingMustHaves[0]}方向上手极快，想了解团队当前主要业务侧重并发送简历！`
-      : `您好！我具备${years}测试及${highlights}落地经验，过往有B端SaaS与客户端全链路交付背景，很想了解贵司${title}岗位详情，方便发送一份定制简历您参考。`
+      ? `您好！关注到贵司${title}岗位，我具备扎实的${highlights}与全链路测试开发底座，对${missingMustHaves[0]}业务场景上手很快，方便发份简历请您看看吗？`
+      : `您好！我有${years}软件与AI测试经验，熟练掌握${highlights}与高并发压测排障，与贵司${title}日常工作很契合，希望能发份简历和您交流！`
   );
 
   return [
-    { key: "direct", label: "直接匹配型", text: direct },
-    { key: "tech", label: "工作内容深挖型", text: tech },
-    { key: "bridge", label: "迁移探底型", text: bridge },
+    { key: "direct", label: "高匹配直投", text: direct },
+    { key: "tech", label: "突出技术成果", text: tech },
+    { key: "bridge", label: "精炼礼貌破冰", text: bridge },
   ];
 }
 

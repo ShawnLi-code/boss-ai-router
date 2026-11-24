@@ -349,9 +349,13 @@ function normalizeParsedResume(trackKey, p) {
     String(txt || "").replace(new RegExp(`^${heading}\\s*`, "m"), "").trim();
 
   const parseHistoryByPeriod = (rawSection, isWork) => {
-    // Strip trailing embedded sections like 专业技能 / 个人总结 inside workExpList
+    // Strip trailing embedded sections and Boss UI suggestion banners inside workExpList
     let text = cleanSection(rawSection, isWork ? "工作经历" : "项目经历");
-    text = text.replace(/\n(?:专业技能|个人总结)\n[\s\S]*$/m, "").trim();
+    text = text
+      .replace(/当前工作经历内容填写较为简单[^\n]*\n?/g, "")
+      .replace(/工作经历结束时间不是至今[^\n]*\n?/g, "")
+      .replace(/\n(?:专业技能|个人总结)\n[\s\S]*$/m, "")
+      .trim();
     const lines = text.split(/\n+/).map((s) => s.trim()).filter(Boolean);
 
     const periodRe = /^20\d{2}\.\d{2}\s*[-~—至]\s*(?:20\d{2}\.\d{2}|至今)$/;
@@ -409,20 +413,23 @@ function normalizeParsedResume(trackKey, p) {
     : parseHistoryByPeriod(p.projectText, false);
 
   const eduLines = cleanSection(p.eduText, "教育经历").split(/\n+/).map((s) => s.trim()).filter(Boolean);
+  const expIdx = eduLines.findIndex((l) => /^经历[:：]?$/.test(l));
+  const eduContent = expIdx >= 0 ? eduLines.slice(expIdx + 1).join("\n").trim() : "";
   const education = eduLines.length
     ? [{
         school: eduLines[0] || "",
         period: eduLines.find((l) => /20\d{2}/.test(l)) || "",
         major: eduLines[2] || "",
         degree: eduLines.find((l) => /本科|硕士|大专|博士/.test(l)) || "",
+        content: eduContent,
       }]
     : [];
 
   const skillText = cleanSection(p.skillText, "专业技能");
   const knownSkillTokens = [
-    "Python", "Pytest", "Playwright", "Selenium", "Requests", "Allure",
-    "Postman", "JMeter", "Docker", "Linux", "SQL", "MySQL", "Java",
-    "RAG", "LLM", "Prompt", "LangChain", "ChromaDB", "React", "GitLab", "Jenkins", "AI辅助测试",
+    "Python", "Pytest", "HTTPX", "asyncio", "FastAPI", "Playwright", "Selenium", "Requests", "Allure",
+    "Postman", "Apifox", "JMeter", "Docker", "Linux", "SQL", "MySQL", "SQLite", "Java", "Git",
+    "RAG", "LLM", "Prompt", "MCP", "Function Call", "DeepSeek", "LangChain", "React", "Wireshark", "Charles",
   ];
   const skills = knownSkillTokens.filter((k) =>
     `${p.fullRawText}`.toLowerCase().includes(k.toLowerCase())
@@ -435,13 +442,13 @@ function normalizeParsedResume(trackKey, p) {
     track_key: trackKey,
     source: "boss_ego_sync",
     candidate_name: p.candidateName || "",
-    years_label: p.yearsLabel || (trackKey === "B" ? "两年经历版" : "真实日期版"),
+    years_label: p.yearsLabel || "1年经验",
     summary: cleanSection(p.summaryText, "个人优势"),
     skills: [...new Set(skills)],
     experiences,
     projects,
     education,
-    raw_text: p.fullRawText || "",
+    raw_text: (p.fullRawText || "").replace(/当前工作经历内容填写较为简单[^\n]*\n?/g, ""),
     synced_at: new Date().toISOString(),
   };
 }
@@ -874,16 +881,22 @@ export async function prepareBossDelivery({
   companyName,
   jobTitle,
   greetingText,
-  autoSend = false,
+  autoSend = true,
+  sendImageResume = true,
+  imagePath = "",
+  onlySendImage = false,
   onLog = () => {},
 }) {
   const targetUrl =
     jobUrl && /^https?:\/\//i.test(jobUrl)
       ? jobUrl
       : `https://www.zhipin.com/web/geek/jobs?query=${encodeURIComponent(`${companyName} ${jobTitle}`.trim())}`;
-  acquireLock(`准备沟通「${companyName} · ${jobTitle}」(${profileId})`);
+  const hasImage = Boolean(sendImageResume && imagePath && fs.existsSync(imagePath));
+  const normalizedImagePath = hasImage ? imagePath.replace(/\\/g, "/") : "";
+
+  acquireLock(`打招呼「${companyName} · ${jobTitle}」(${profileId})`);
   try {
-    onLog(`正在切换至 ${profileId} 打开岗位/沟通页（${companyName} · ${jobTitle}）...`);
+    onLog(`正在使用 ${profileId} 打开岗位/聊天框（${companyName} · ${jobTitle}）...`);
     const code = `
 const randDelay = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
 const task = await taskSpace("boss-deliver-" + Date.now(), { profileId: ${JSON.stringify(profileId)} });
@@ -891,7 +904,7 @@ const page = (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0]
 
 await page.goto(${JSON.stringify(targetUrl)}, { waitUntil: "domcontentloaded", timeout: 25000 });
 await page.waitForLoadState("networkidle", { timeout: 12000 }).catch(() => {});
-await page.waitForTimeout(randDelay(2500, 4200));
+await page.waitForTimeout(randDelay(2200, 3600));
 
 const verifyState = await page.evaluate(() => {
   const body = (document.body?.innerText || "").slice(0, 700);
@@ -916,16 +929,15 @@ if (verifyState.needVerify) {
   process.exit(0);
 }
 
-// 温和滚动一下再点沟通
 await page.mouse.wheel(0, 220, { label: "review job before chat" }).catch(() => {});
-await page.waitForTimeout(randDelay(1200, 2200));
+await page.waitForTimeout(randDelay(1000, 1800));
 
 if (verifyState.chatBtnText.includes("立即沟通")) {
   await page.click(".btn-startchat, .op-btn-chat", { label: "click start chat" });
-  await page.waitForTimeout(randDelay(2000, 3500));
+  await page.waitForTimeout(randDelay(2200, 3400));
 } else if (verifyState.chatBtnText.includes("继续沟通")) {
   await page.click(".btn-startchat, .op-btn-chat", { label: "open existing chat" });
-  await page.waitForTimeout(randDelay(2000, 3200));
+  await page.waitForTimeout(randDelay(2000, 3000));
 }
 
 if (await page.evaluate(() => /verify-slider|security/i.test(location.href) || /请完成安全验证|拖动滑块/.test(document.body?.innerText || ""))) {
@@ -939,49 +951,223 @@ if (await page.evaluate(() => /verify-slider|security/i.test(location.href) || /
   process.exit(0);
 }
 
-// 检查聊天输入框并填入专属话术
 const inputSelector = "div.chat-input[contenteditable='true'], textarea.input-area, .edit-area [contenteditable='true'], .greet-boss-dialog textarea, .chat-conversation [contenteditable='true']";
 const hasInput = await page.waitForSelector(inputSelector, { state: "visible", timeout: 8000 }).then(() => true).catch(() => false);
 
-if (hasInput) {
+const shouldAutoSend = ${JSON.stringify(Boolean(autoSend))};
+const shouldSendText = ${JSON.stringify(Boolean(!onlySendImage && greetingText))};
+const shouldSendImg = ${JSON.stringify(Boolean(hasImage))};
+const imgFilePath = ${JSON.stringify(normalizedImagePath)};
+let textSent = false;
+let imageSent = false;
+let imageBlockedReason = "";
+
+if (hasInput && shouldSendText) {
   await page.click(inputSelector, { label: "focus chat input" });
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(450);
   await page.fill(inputSelector, ${JSON.stringify(greetingText)}).catch(async () => {
     await page.keyboard.paste(${JSON.stringify(greetingText)});
   });
-  await page.waitForTimeout(randDelay(800, 1400));
-  if (${JSON.stringify(Boolean(autoSend))}) {
+  await page.waitForTimeout(randDelay(700, 1200));
+  if (shouldAutoSend) {
     await page.click("button.btn-send, .btn-send", { label: "send greeting message" }).catch(async () => {
       await page.press(inputSelector, "Enter");
     });
-    await page.waitForTimeout(1500);
-    await task.finish({ keep: [] });
-    console.log("RESULT_JSON:" + JSON.stringify({
-      status: "SENT",
-      taskSpaceId: task.spaceId,
-      url: await page.url(),
-      message: "已用指定账号发送专属打招呼话术",
-    }));
-    process.exit(0);
+    textSent = true;
+    await page.waitForTimeout(randDelay(1400, 2200));
   }
 }
 
-// 默认半自动安全模式：移交已填好话术的标签页由你扫一眼确认发送
+if (shouldSendImg) {
+  // 检测 Boss 聊天框顶部的「发送图片」控件是否可用
+  const imgBtnState = await page.evaluate(() => {
+    const wrap = document.querySelector(".btn-sendimg, [aria-label='发送图片']");
+    const inp = wrap?.querySelector("input[type='file']")
+      || [...document.querySelectorAll(".chat-conversation input[type='file'], .chat-im input[type='file']")].find((i) => /image\\/gif|image\\/png/i.test(i.accept || ""));
+    if (!inp) return { found: false, reason: "当前页面未展开完整聊天工具栏" };
+    const cls = [wrap?.className || "", wrap?.parentElement?.className || ""].join(" ");
+    const tip = (wrap?.innerText || wrap?.getAttribute("title") || wrap?.parentElement?.innerText || "").trim();
+    const disabled = Boolean(inp.disabled || /unable|disable/i.test(cls) || /回复后/.test(tip));
+    if (disabled) return { found: true, enabled: false, reason: tip || "Boss 限制需对方回复后才可发送图片" };
+    inp.setAttribute("data-ego-chat-img", "1");
+    return { found: true, enabled: true };
+  });
+
+  if (imgBtnState.found && imgBtnState.enabled) {
+    await page.setInputFiles("input[data-ego-chat-img='1']", [imgFilePath]);
+    await page.waitForTimeout(1600);
+
+    // 部分版本上传图片后会弹出确认框（发送 / 确定）或直接发出，检查是否存在确认按钮或拦截提示
+    const afterSet = await page.evaluate((doConfirm) => {
+      const toastTxt = [...document.querySelectorAll(".toast, [class*='toast'], .boss-popup__content, .dialog-wrap")]
+        .filter((el) => getComputedStyle(el).display !== "none" && el.offsetHeight > 5)
+        .map((el) => (el.innerText || "").trim())
+        .join(" ");
+      if (/回复后.*发送|暂不支持|频繁/.test(toastTxt)) {
+        return { blocked: true, reason: toastTxt.slice(0, 80) };
+      }
+      const wraps = [...document.querySelectorAll(".dialog-wrap, .boss-popup__wrapper")].filter((el) => {
+        const s = getComputedStyle(el);
+        return s.display !== "none" && s.visibility !== "hidden" && el.offsetHeight > 40;
+      });
+      for (const w of wraps) {
+        const btn = [...w.querySelectorAll("button, .btn, span.btn, a.btn")].find((b) =>
+          /^(?:发送|确定|确认发送|确认)$/.test((b.innerText || "").trim())
+        );
+        if (btn && doConfirm) {
+          btn.setAttribute("data-ego-confirm-img", "1");
+          return { blocked: false, needClickConfirm: true };
+        }
+      }
+      return { blocked: false, needClickConfirm: false };
+    }, shouldAutoSend);
+
+    if (afterSet.blocked) {
+      imageBlockedReason = afterSet.reason;
+    } else {
+      if (afterSet.needClickConfirm && shouldAutoSend) {
+        await page.click("[data-ego-confirm-img='1'] >> nth=0", { label: "confirm send resume image" }).catch(() => {});
+      }
+      await page.waitForTimeout(1800);
+      if (shouldAutoSend) imageSent = true;
+    }
+  } else {
+    imageBlockedReason = imgBtnState.reason || "需对方回复后才可发图";
+  }
+}
+
+if (shouldAutoSend && (textSent || imageSent)) {
+  await task.finish({ keep: [] });
+  const status = imageSent
+    ? "SENT_WITH_IMAGE"
+    : (shouldSendImg ? "SENT_TEXT_PENDING_IMAGE" : "SENT");
+  const message = imageSent && textSent
+    ? "✅ 已自动发出专属招呼语 + 高清图片简历！"
+    : imageSent
+      ? "✅ 已自动发出高清图片简历！"
+      : shouldSendImg
+        ? \`✅ 已发出专属招呼语（\${imageBlockedReason || "对方回复前暂不可发图"}，HR 回复后点「补发图片简历」秒发）\`
+        : "✅ 已自动发出专属打招呼话术";
+  console.log("RESULT_JSON:" + JSON.stringify({
+    status,
+    textSent,
+    imageSent,
+    imageBlockedReason,
+    taskSpaceId: task.spaceId,
+    url: await page.url(),
+    message,
+  }));
+  process.exit(0);
+}
+
+// 半自动或仅补发图片受阻时：保留标签页移交给用户查看处理
 await task.handOff();
 console.log("RESULT_JSON:" + JSON.stringify({
   status: "PREPARED_HANDOFF",
+  textSent,
+  imageSent,
+  imageBlockedReason,
   taskSpaceId: task.spaceId,
   url: await page.url(),
   hasInput,
   chatBtnText: verifyState.chatBtnText,
-  message: hasInput
-    ? "已在对应账号窗口填入专属打招呼话术，请你在 Ego 确认无误后按发送（或附上定制PDF简历）"
-    : "已用对应账号打开岗位/沟通页，请在 Ego 页面中确认后沟通",
+  message: onlySendImage && imageBlockedReason
+    ? \`⚠️ 当前会话暂不可直接发图（\${imageBlockedReason}），已为你打开聊天窗口\`
+    : hasInput
+      ? "已在对应账号窗口预填好招呼语，请确认后发送"
+      : "已打开岗位沟通页，请在 Ego 页面中确认后发送",
 }));
 `;
-    const { combined } = await runEgoScript("prepare-delivery", code, 90_000);
+    const { combined } = await runEgoScript("prepare-delivery", code, 95_000);
     const res = parseMarkedJson(combined);
-    onLog(`📨 ${res.message} (TaskSpace #${res.taskSpaceId})`);
+    onLog(`📨 ${res.message}`);
+    return res;
+  } finally {
+    releaseLock();
+  }
+}
+
+export async function renderResumeImageViaEgo({
+  pdfRenderUrl = "",
+  fallbackHtmlUrl = "",
+  outputPath,
+  profileId = "Profile 1",
+  onLog = () => {},
+}) {
+  acquireLock("生成高清图片简历");
+  try {
+    onLog("正在生成超清图片简历（PNG）...");
+    const code = `
+const fs = await import("node:fs");
+const path = await import("node:path");
+const task = await taskSpace("boss-resume-img-" + Date.now(), { profileId: ${JSON.stringify(profileId)} });
+const outFile = ${JSON.stringify(outputPath)};
+let width = 0;
+let height = 0;
+try {
+  const page = (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
+  let pngBuffer = null;
+
+  if (${JSON.stringify(Boolean(pdfRenderUrl))}) {
+    await page.goto(${JSON.stringify(pdfRenderUrl)}, { waitUntil: "load", timeout: 25000 }).catch(() => {});
+    const ok = await page.waitForFunction(() => window.__PDF_PNG_READY === true || Boolean(window.__PDF_PNG_ERROR), undefined, { timeout: 20000 })
+      .then(() => true)
+      .catch(() => false);
+    if (ok) {
+      const rendered = await page.evaluate(() => ({
+        err: window.__PDF_PNG_ERROR || "",
+        dataUrl: window.__PDF_PNG_DATA_URL || "",
+        w: window.__PDF_PNG_WIDTH || 0,
+        h: window.__PDF_PNG_HEIGHT || 0,
+      }));
+      if (rendered.dataUrl && rendered.dataUrl.startsWith("data:image/png;base64,")) {
+        pngBuffer = Buffer.from(rendered.dataUrl.slice("data:image/png;base64,".length), "base64");
+        width = rendered.w;
+        height = rendered.h;
+      }
+    }
+  }
+
+  if (!pngBuffer && ${JSON.stringify(Boolean(fallbackHtmlUrl))}) {
+    await page.cdp("Emulation.setDeviceMetricsOverride", {
+      width: 960,
+      height: 1400,
+      deviceScaleFactor: 2,
+      mobile: false,
+    }).catch(() => {});
+    await page.goto(${JSON.stringify(fallbackHtmlUrl)}, { waitUntil: "load", timeout: 18000 });
+    await page.waitForFunction(() => window.__RESUME_READY === true, undefined, { timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(300);
+    const rect = await page.evaluate(() => {
+      const el = document.getElementById("sheet");
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: Math.max(0, r.x), y: Math.max(0, r.y), width: Math.ceil(r.width), height: Math.ceil(r.height) };
+    });
+    const shot = await page.cdp("Page.captureScreenshot", {
+      format: "png",
+      captureBeyondViewport: true,
+      ...(rect ? { clip: { ...rect, scale: 2 } } : {}),
+    });
+    pngBuffer = Buffer.from(shot.data, "base64");
+    width = rect ? rect.width * 2 : 1640;
+    height = rect ? rect.height * 2 : 2240;
+  }
+
+  if (!pngBuffer) {
+    throw new Error("图片简历渲染失败，请直接上传 PNG/JPG 图片或检查 PDF 文件");
+  }
+
+  fs.mkdirSync(path.dirname(outFile), { recursive: true });
+  fs.writeFileSync(outFile, pngBuffer);
+  console.log("RESULT_JSON:" + JSON.stringify({ ok: true, path: outFile, bytes: pngBuffer.length, width, height }));
+} finally {
+  await task.finish({ keep: [] }).catch(() => {});
+}
+`;
+    const { combined } = await runEgoScript("render-resume-img", code, 60_000);
+    const res = parseMarkedJson(combined);
+    onLog(`✅ 已生成高清图片简历（${Math.round((res.bytes || 0) / 1024)} KB）`);
     return res;
   } finally {
     releaseLock();
