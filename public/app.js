@@ -1872,12 +1872,30 @@ function renderDeliveries() {
   }
 
   const q = state.deliverySearch.trim().toLowerCase();
+  const classifyLog = (l) => {
+    const isDelivered = l.status === "DELIVERED";
+    const imgDone = Boolean(l.image_sent || l.image_status === "SENT" || l.job_image_delivery === "SENT");
+    const imgPending = !imgDone && (l.image_status === "PENDING_REPLY" || l.job_image_delivery === "PENDING_REPLY");
+    const hrReplied = l.current_job_status === "REPLIED" || String(l.detail || "").includes("HR已回复");
+    return { isDelivered, imgDone, imgPending, hrReplied };
+  };
+
+  const setCount = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = String(n); };
+  setCount("dcnt-all", logs.length);
+  setCount("dcnt-text-only", logs.filter((l) => { const c = classifyLog(l); return c.isDelivered && !c.imgDone; }).length);
+  setCount("dcnt-replied", logs.filter((l) => classifyLog(l).hrReplied).length);
+  setCount("dcnt-with-img", logs.filter((l) => { const c = classifyLog(l); return c.isDelivered && c.imgDone; }).length);
+  setCount("dcnt-pending-img", logs.filter((l) => classifyLog(l).imgPending).length);
+  setCount("dcnt-verify", logs.filter((l) => !classifyLog(l).isDelivered).length);
+
   const filtered = logs.filter((l) => {
     if (state.deliveryProfile !== "ALL" && l.profile_id !== state.deliveryProfile) return false;
-    const imgState = l.image_sent ? "SENT" : (l.image_status || l.job_image_delivery || "NONE");
-    if (state.deliveryFilter === "WITH_IMAGE" && !(l.status === "DELIVERED" && imgState === "SENT")) return false;
-    if (state.deliveryFilter === "PENDING_IMAGE" && imgState !== "PENDING_REPLY") return false;
-    if (state.deliveryFilter === "VERIFICATION" && l.status === "DELIVERED") return false;
+    const c = classifyLog(l);
+    if (state.deliveryFilter === "TEXT_ONLY" && !(c.isDelivered && !c.imgDone)) return false;
+    if (state.deliveryFilter === "REPLIED" && !c.hrReplied) return false;
+    if (state.deliveryFilter === "WITH_IMAGE" && !(c.isDelivered && c.imgDone)) return false;
+    if (state.deliveryFilter === "PENDING_IMAGE" && !c.imgPending) return false;
+    if (state.deliveryFilter === "VERIFICATION" && c.isDelivered) return false;
     if (q) {
       const hay = `${l.company_name} ${l.job_title} ${l.profile_id} ${l.greeting_text} ${l.detail}`.toLowerCase();
       if (!hay.includes(q)) return false;
