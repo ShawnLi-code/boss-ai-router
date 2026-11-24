@@ -1347,7 +1347,7 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
         onLog: (m) => logEvent(m),
       });
       if (chatRes.status === "VERIFICATION_REQUIRED") {
-        return sendJson(202, { ...chatRes, state: buildStatePayload() });
+        return sendJson(res, 202, { ...chatRes, state: buildStatePayload() });
       }
       const messages = chatRes.status === "OK" && chatRes.messages?.length ? chatRes.messages : (job.chat_messages || []);
       const hasHrReply = messages.some((m) => m.sender === "HR");
@@ -1364,7 +1364,7 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
         customHint: body.customHint || "",
         settings,
       });
-      return sendJson(200, {
+      return sendJson(res, 200, {
         ok: true,
         chatStatus: chatRes.status,
         message: chatRes.message || "",
@@ -1393,7 +1393,7 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
         customHint: body.customHint || "",
         settings,
       });
-      return sendJson(200, { ok: true, advice });
+      return sendJson(res, 200, { ok: true, advice });
     }
 
     const chatSendMatch = pathname.match(/^\/api\/jobs\/(\d+)\/chat\/send$/);
@@ -1404,7 +1404,7 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
       const replyText = String(body.replyText || "").trim();
       const sendImageResume = Boolean(body.sendImageResume);
       if (!replyText && !sendImageResume) {
-        return sendJson(400, { error: "请先输入回复内容或勾选发送图片简历" });
+        return sendJson(res, 400, { error: "请先输入回复内容或勾选发送图片简历" });
       }
       const tracks = getAccountTracks();
       const settings = getSettings();
@@ -1423,7 +1423,7 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
         onLog: (m) => logEvent(m),
       });
       if (sendRes.status === "VERIFICATION_REQUIRED") {
-        return sendJson(202, { ...sendRes, state: buildStatePayload() });
+        return sendJson(res, 202, { ...sendRes, state: buildStatePayload() });
       }
 
       const prevMsgs = Array.isArray(job.chat_messages) ? [...job.chat_messages] : [];
@@ -1463,7 +1463,7 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
 
       const resume = getResumeByTrack(trackKey) || getPrimaryResume();
       const advice = analyzeConversationAndSuggestReplies({ job: updatedJob, resume, messages: prevMsgs, settings });
-      return sendJson(200, { ok: true, delivery: sendRes, messages: prevMsgs, advice, state: buildStatePayload() });
+      return sendJson(res, 200, { ok: true, delivery: sendRes, messages: prevMsgs, advice, state: buildStatePayload() });
     }
 
     const deliverMatch = pathname.match(/^\/api\/jobs\/(\d+)\/deliver$/);
