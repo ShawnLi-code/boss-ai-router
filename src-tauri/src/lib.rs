@@ -128,18 +128,66 @@ fn spawn_node_server(app: &tauri::AppHandle) -> Result<(u16, Option<Child>), Str
 
 const SINGLE_INSTANCE_PORT: u16 = 37901;
 
+#[cfg(target_os = "windows")]
+fn current_desktop_name() -> String {
+    use std::ffi::c_void;
+    extern "system" {
+        fn GetCurrentThreadId() -> u32;
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetThreadDesktop(dwThreadId: u32) -> *mut c_void;
+        fn GetUserObjectInformationA(
+            hObj: *mut c_void,
+            nIndex: i32,
+            pvInfo: *mut u8,
+            nLength: u32,
+            lpnLengthNeeded: *mut u32,
+        ) -> i32;
+    }
+    const UOI_NAME: i32 = 2;
+    unsafe {
+        let desk = GetThreadDesktop(GetCurrentThreadId());
+        if desk.is_null() {
+            return String::new();
+        }
+        let mut needed: u32 = 0;
+        let _ = GetUserObjectInformationA(desk, UOI_NAME, std::ptr::null_mut(), 0, &mut needed);
+        if needed == 0 || needed > 512 {
+            return String::new();
+        }
+        let mut buf = vec![0u8; needed as usize];
+        if GetUserObjectInformationA(desk, UOI_NAME, buf.as_mut_ptr(), needed, &mut needed) == 0 {
+            return String::new();
+        }
+        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        String::from_utf8_lossy(&buf[..end]).to_string()
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn current_desktop_name() -> String {
+    "default".to_string()
+}
+
+fn log_startup_error(msg: &str) {
+    let path = std::env::temp_dir().join("boss-ai-router-startup.log");
+    let _ = std::fs::write(&path, msg);
+}
+
 fn try_focus_existing_instance() -> bool {
     let addr: SocketAddr = format!("127.0.0.1:{SINGLE_INSTANCE_PORT}").parse().unwrap();
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(180)) else {
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(200)) else {
         return false;
     };
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
-    if stream.write_all(b"FOCUS\n").is_err() {
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(400)));
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(900)));
+    let req = format!("FOCUS:{}\n", current_desktop_name());
+    if stream.write_all(req.as_bytes()).is_err() {
         return false;
     }
     let mut ack = [0u8; 16];
-    matches!(stream.read(&mut ack), Ok(n) if n > 0 && &ack[..2] == b"OK")
+    matches!(stream.read(&mut ack), Ok(n) if n >= 2 && &ack[..2] == b"OK")
 }
 
 fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
@@ -173,20 +221,40 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(ServerProcess(shared_child.clone()))
         .setup(move |app| {
-            create_main_window(app)?;
+            if let Err(err) = create_main_window(app) {
+                log_startup_error(&format!("create_main_window failed: {err}"));
+                return Err(err.into());
+            }
 
             let focus_handle = app.handle().clone();
+            let host_desktop = current_desktop_name();
             if let Ok(listener) = TcpListener::bind(("127.0.0.1", SINGLE_INSTANCE_PORT)) {
                 std::thread::spawn(move || {
                     for mut stream in listener.incoming().flatten() {
-                        let mut buf = [0u8; 32];
-                        let _ = stream.read(&mut buf);
-                        if let Some(win) = focus_handle.get_webview_window("main") {
-                            let _ = win.unminimize();
-                            let _ = win.show();
-                            let _ = win.set_focus();
+                        let mut buf = [0u8; 256];
+                        let n = stream.read(&mut buf).unwrap_or(0);
+                        let req = String::from_utf8_lossy(&buf[..n]);
+                        let caller_desktop = req.trim().strip_prefix("FOCUS:").unwrap_or("");
+                        if !host_desktop.is_empty() && !caller_desktop.is_empty() && caller_desktop != host_desktop {
+                            let _ = stream.write_all(b"DENY\n");
+                            continue;
                         }
-                        let _ = stream.write_all(b"OK\n");
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        let h = focus_handle.clone();
+                        let scheduled = focus_handle.run_on_main_thread(move || {
+                            let ok = if let Some(win) = h.get_webview_window("main") {
+                                let _ = win.unminimize();
+                                let _ = win.show();
+                                let _ = win.set_focus();
+                                win.is_visible().unwrap_or(true)
+                            } else {
+                                false
+                            };
+                            let _ = tx.send(ok);
+                        });
+                        let focused = scheduled.is_ok()
+                            && matches!(rx.recv_timeout(Duration::from_millis(700)), Ok(true));
+                        let _ = stream.write_all(if focused { b"OK\n" } else { b"DENY\n" });
                     }
                 });
             }
