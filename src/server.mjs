@@ -61,6 +61,7 @@ import {
   prepareBossDelivery,
   renderResumeImageViaEgo,
   scrapeBossJobs,
+  syncBossContactedChats,
   syncResumeFromBoss,
 } from "./ego-worker.mjs";
 
@@ -469,7 +470,7 @@ function buildStatePayload() {
     funnel: getFunnelStats(),
     patrol_runs: listPatrolRuns(25),
     scrape_telemetry: getScrapeTelemetry(),
-    logs: listDeliveryLogs(80),
+    logs: listDeliveryLogs(300),
     recentEvents: recentLogs,
     activeLock: getActiveLock(),
     patrolRunning,
@@ -1225,7 +1226,92 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
         notes: body.notes,
         tailored_resume: body.tailored_resume,
       });
+      if (body.status && ["DELIVERED", "REPLIED", "INTERVIEW"].includes(body.status)) {
+        const hasLog = listDeliveryLogs(300).some((l) => l.job_id === job.id && l.status === "DELIVERED");
+        if (!hasLog) {
+          const tTrack = getAccountTracks().find((t) => t.profile_id === (updated.assigned_profile_id || job.assigned_profile_id)) || getAccountTracks()[0];
+          const imgStatus = updated.tailored_resume?.image_delivery || "NONE";
+          addDeliveryLog({
+            job_id: job.id,
+            company_name: job.company_name,
+            job_title: job.job_title,
+            track_key: tTrack?.track_key || "A",
+            profile_id: updated.assigned_profile_id || tTrack?.profile_id || "Profile 1",
+            action: "MANUAL_SYNC",
+            greeting_text: updated.custom_greeting || job.custom_greeting || "",
+            text_sent: true,
+            image_sent: imgStatus === "SENT",
+            image_status: imgStatus,
+            status: "DELIVERED",
+            detail: `手动确认已沟通（状态：${body.status}）`,
+          });
+        }
+      }
       return sendJson(res, 200, { ok: true, job: updated, state: buildStatePayload() });
+    }
+
+    if (req.method === "POST" && pathname === "/api/deliveries/sync-boss") {
+      const body = await readBody(req).catch(() => ({}));
+      const tracks = getAccountTracks();
+      const targetProfiles = body.profileId
+        ? [body.profileId]
+        : [...new Set(tracks.map((t) => t.profile_id).filter(Boolean))];
+      const allJobs = listJobs();
+      const existingLogs = listDeliveryLogs(400);
+      let syncedCount = 0;
+      const matchedCompanies = [];
+
+      for (const pid of targetProfiles) {
+        const resSync = await syncBossContactedChats({
+          profileId: pid,
+          maxItems: 60,
+          onLog: (m) => logEvent(m),
+        });
+        if (resSync.status === "VERIFICATION_REQUIRED") {
+          return sendJson(resSync.taskSpaceId ? 202 : 200, { ...resSync, state: buildStatePayload() });
+        }
+        const tTrack = tracks.find((t) => t.profile_id === pid) || tracks[0];
+        for (const ch of resSync.chats || []) {
+          const cRoot = normalizeCompanyRoot(ch.company_name);
+          const matchedJobs = allJobs.filter((j) => {
+            if (ch.company_name && (j.company_name === ch.company_name || (cRoot && j.normalized_company && (j.normalized_company === cRoot || j.normalized_company.includes(cRoot) || cRoot.includes(j.normalized_company))))) {
+              if (!ch.job_title) return true;
+              return j.job_title === ch.job_title || j.job_title.includes(ch.job_title) || ch.job_title.includes(j.job_title);
+            }
+            return ch.raw_text && j.company_name && ch.raw_text.includes(j.company_name);
+          });
+          for (const mj of matchedJobs) {
+            const alreadyLogged = existingLogs.some((l) => l.job_id === mj.id && l.status === "DELIVERED");
+            if (mj.status === "NEW" || mj.status === "PREPARED") {
+              updateJobRouting(mj.id, {
+                assigned_profile_id: pid,
+                status: "DELIVERED",
+              });
+            }
+            if (!alreadyLogged) {
+              const logRow = addDeliveryLog({
+                job_id: mj.id,
+                company_name: mj.company_name,
+                job_title: mj.job_title,
+                track_key: tTrack?.track_key || "A",
+                profile_id: pid,
+                action: "BOSS_HISTORY_SYNC",
+                greeting_text: ch.last_msg || "",
+                text_sent: true,
+                image_sent: false,
+                image_status: mj.tailored_resume?.image_delivery || "NONE",
+                status: "DELIVERED",
+                detail: `从 Boss 历史聊天同步：${ch.recruiter_name || "HR"}${ch.last_msg ? ` · 最近消息「${ch.last_msg.slice(0, 40)}」` : ""}`,
+              });
+              existingLogs.unshift(logRow);
+              syncedCount++;
+              matchedCompanies.push(`${mj.company_name}·${mj.job_title}`);
+            }
+          }
+        }
+      }
+      logEvent(`🔄 历史沟通同步完成：新增识别 ${syncedCount} 个已沟通过的岗位`);
+      return sendJson(res, 200, { ok: true, syncedCount, matchedCompanies, state: buildStatePayload() });
     }
 
     const deliverMatch = pathname.match(/^\/api\/jobs\/(\d+)\/deliver$/);
@@ -1260,17 +1346,29 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
         });
       }
 
+      const onlySendImage = Boolean(body.onlySendImage);
       const history = getCompanyDeliveryHistory(job.company_name);
+      const alreadyThisJob = ["DELIVERED", "REPLIED", "INTERVIEW"].includes(job.status);
+      const sameAccountMatch = history.find((h) => h.profile_id === profileId);
       const conflict = history.find((h) => h.profile_id !== profileId);
+
+      if (!onlySendImage && !body.forceRepeat && (alreadyThisJob || sameAccountMatch)) {
+        const when = (sameAccountMatch?.created_at || job.updated_at || "").slice(0, 10);
+        return sendJson(res, 409, {
+          code: "DUPLICATE_GREETING",
+          error: `防重复拦截：该岗位/公司「${job.company_name}」此前已由 ${sameAccountMatch?.profile_id || job.assigned_profile_id || profileId} 沟通过（${when || "近期"}），已阻止重复发送！如需补发图片简历请点「补发图片简历」。`,
+          duplicate: sameAccountMatch || { job_id: job.id, profile_id: profileId, created_at: job.updated_at },
+        });
+      }
       if (conflict && !body.forceCrossTrack) {
         return sendJson(res, 409, {
+          code: "CROSS_ACCOUNT_CONFLICT",
           error: `防撞车提醒：公司「${job.company_name}」关联主体已于 ${conflict.created_at.slice(0, 10)} 使用 ${conflict.profile_id} 沟通过，请谨慎避免多号重复投递。`,
           conflict,
         });
       }
 
       const todayCount = countTodayDeliveries(profileId);
-      const onlySendImage = Boolean(body.onlySendImage);
       if (!onlySendImage && todayCount >= dailyLimit && !body.ignoreLimit) {
         return sendJson(res, 429, {
           error: `防封号保护：${profileLabel} (${profileId}) 今日已投递 ${todayCount}/${dailyLimit} 次，已达安全上限。`,
@@ -1294,12 +1392,14 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
         sendImageResume,
         imagePath: resumeMeta.exists ? resumeMeta.filePath : "",
         onlySendImage,
+        allowAlreadyContacted: Boolean(body.forceRepeat),
         onLog: (m) => logEvent(m),
       });
 
       const isSent = deliveryRes.status === "SENT"
         || deliveryRes.status === "SENT_WITH_IMAGE"
-        || deliveryRes.status === "SENT_TEXT_PENDING_IMAGE";
+        || deliveryRes.status === "SENT_TEXT_PENDING_IMAGE"
+        || deliveryRes.status === "ALREADY_CONTACTED_ON_BOSS";
 
       const logStatus = isSent
         ? "DELIVERED"
@@ -1307,31 +1407,39 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
           ? "PREPARED"
           : "VERIFICATION";
 
-      if (!onlySendImage) {
-        addDeliveryLog({
-          job_id: job.id,
-          company_name: job.company_name,
-          track_key: trackKey,
-          profile_id: profileId,
-          action: autoSend ? "AUTO_SEND" : "PREFILL_HANDOFF",
-          greeting_text: greetingText,
-          status: logStatus,
-          detail: deliveryRes.message || "",
-        });
-      }
+      const prevTailored = job.tailored_resume || {};
+      const nextImageDelivery = deliveryRes.imageSent
+        ? "SENT"
+        : (deliveryRes.status === "SENT_TEXT_PENDING_IMAGE" || (deliveryRes.status === "ALREADY_CONTACTED_ON_BOSS" && sendImageResume))
+          ? "PENDING_REPLY"
+          : (prevTailored.image_delivery || "NONE");
+
+      addDeliveryLog({
+        job_id: job.id,
+        company_name: job.company_name,
+        job_title: job.job_title,
+        track_key: trackKey,
+        profile_id: profileId,
+        action: onlySendImage
+          ? "SEND_IMAGE_ONLY"
+          : deliveryRes.status === "ALREADY_CONTACTED_ON_BOSS"
+            ? "BOSS_ALREADY_CONTACTED"
+            : autoSend
+              ? "AUTO_SEND"
+              : "PREFILL_HANDOFF",
+        greeting_text: onlySendImage ? "" : greetingText,
+        text_sent: Boolean(deliveryRes.textSent),
+        image_sent: Boolean(deliveryRes.imageSent),
+        image_status: nextImageDelivery,
+        status: logStatus,
+        detail: deliveryRes.message || "",
+      });
 
       if (deliveryRes.status === "VERIFICATION_REQUIRED") {
         tripProfileBreaker(profileId, "投递沟通时触发安全验证");
         broadcast("verification", deliveryRes);
         return sendJson(res, 202, { ...deliveryRes, state: buildStatePayload() });
       }
-
-      const prevTailored = job.tailored_resume || {};
-      const nextImageDelivery = deliveryRes.imageSent
-        ? "SENT"
-        : deliveryRes.status === "SENT_TEXT_PENDING_IMAGE"
-          ? "PENDING_REPLY"
-          : (prevTailored.image_delivery || "NONE");
 
       updateJobRouting(job.id, {
         manual_track: trackKey,

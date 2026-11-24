@@ -25,11 +25,15 @@ const state = {
   watchlist: [...DEFAULT_ROLES],
   selectedWatchlist: new Set(DEFAULT_ROLES),
   editingResumeCtx: null,
+  deliveryFilter: "ALL",
+  deliveryProfile: "ALL",
+  deliverySearch: "",
 };
 
 const els = {
   versionTag: document.getElementById("app-version-tag"),
   navJobsCount: document.getElementById("nav-jobs-count"),
+  navDeliveriesCount: document.getElementById("nav-deliveries-count"),
   sideALabel: document.getElementById("side-a-label"),
   sideAQuota: document.getElementById("side-a-quota"),
   sideBLabel: document.getElementById("side-b-label"),
@@ -96,6 +100,11 @@ const els = {
   blacklistInput: document.getElementById("blacklist-input"),
   blacklistItems: document.getElementById("blacklist-items"),
   deliveryLogsList: document.getElementById("delivery-logs-list"),
+  deliveryKpiStrip: document.getElementById("delivery-kpi-strip"),
+  deliveriesList: document.getElementById("deliveries-list"),
+  deliveryProfileFilter: document.getElementById("delivery-profile-filter"),
+  deliverySearchInput: document.getElementById("delivery-search-input"),
+  btnSyncBossChats: document.getElementById("btn-sync-boss-chats"),
   themeToggleBtn: document.getElementById("theme-toggle-btn"),
   resumeEditModal: document.getElementById("resume-edit-modal"),
   resumeEditTitle: document.getElementById("resume-edit-modal-title"),
@@ -190,6 +199,7 @@ const navItems = [...document.querySelectorAll(".nav-item[data-view]")];
 const viewPanes = {
   jobs: document.getElementById("view-jobs"),
   resumes: document.getElementById("view-resumes"),
+  deliveries: document.getElementById("view-deliveries"),
   funnel: document.getElementById("view-funnel"),
   settings: document.getElementById("view-settings"),
 };
@@ -313,6 +323,7 @@ function renderAll() {
   renderJobList();
   renderInspector();
   renderResumes();
+  renderDeliveries();
   renderFunnel();
   renderBlacklist();
   renderSettings();
@@ -320,12 +331,19 @@ function renderAll() {
 }
 
 function renderSidebarSummary() {
-  const { jobs, tracks, settings } = state.data;
+  const { jobs, tracks, settings, logs = [] } = state.data;
   const eligible = jobs.filter((j) => (j.filter_status || "PASS") === "PASS");
   const contacted = jobs.filter((j) => CONTACTED_STATUSES.has(j.status));
   const filtered = jobs.filter((j) => j.filter_status === "FILTERED");
 
   els.navJobsCount.textContent = eligible.length;
+  if (els.navDeliveriesCount) {
+    const deliveredJobsCount = Math.max(
+      contacted.length,
+      new Set(logs.filter((l) => l.status === "DELIVERED").map((l) => l.job_id)).size
+    );
+    els.navDeliveriesCount.textContent = deliveredJobsCount;
+  }
   els.cntAll.textContent = eligible.length;
   els.cntSalaryIdeal.textContent = eligible.filter((j) => j.match?.salary_fit?.highlighted).length;
   els.cntContacted.textContent = contacted.length;
@@ -603,12 +621,13 @@ async function renderInspector(fetchFresh = false) {
   const rep = intel.reputation || {};
   const commute = job.commute || {};
   const lookupEntity = regName || job.company_name;
+  const sameAccountHistory = (job.company_history || []).find((h) => h.profile_id === preferredProfile);
   const conflict = (job.company_history || []).find((h) => h.profile_id !== preferredProfile);
 
   const defaultAutoSend = settings.deliver_auto_send !== "false";
   const defaultSendImg = settings.deliver_send_image !== "false" && resumeImg.exists;
   const imgDeliveryState = job.tailored_resume?.image_delivery || "NONE";
-  const alreadyContacted = CONTACTED_STATUSES.has(job.status);
+  const alreadyContacted = CONTACTED_STATUSES.has(job.status) || Boolean(sameAccountHistory);
 
   els.jobInspectorPane.innerHTML = `
     <div class="inspector-head">
@@ -630,7 +649,8 @@ async function renderInspector(fetchFresh = false) {
 
     ${job.filter_status === "FILTERED" ? `<div class="alert-strip alert-warn" style="border-radius:8px;"><span><strong>已过滤原因：</strong>${esc(job.filter_reason || "非目标岗位")}</span></div>` : ""}
     ${job.blacklisted ? `<div class="conflict-alert">黑名单公司拦截：${esc(job.blacklisted.company_name)}（${esc(job.blacklisted.reason)}）</div>` : ""}
-    ${conflict ? `<div class="conflict-alert">防撞车提醒：该公司曾使用 ${esc(conflict.profile_id)} 联系过，建议切换为同一账号避免重复打招呼。</div>` : ""}
+    ${conflict ? `<div class="conflict-alert">防撞车提醒：该公司曾使用 ${esc(conflict.profile_id)} 联系过（${esc((conflict.created_at || "").slice(0, 10))}），建议切换为同一账号避免重复打招呼。</div>` : ""}
+    ${alreadyContacted ? `<div class="alert-strip alert-info" style="border-radius:8px;"><span><strong>🛡️ 防重复提示：</strong>${CONTACTED_STATUSES.has(job.status) ? "该岗位已处于「" + esc(STATUS_LABELS[job.status] || job.status) + "」" : "该公司此前已用 " + esc(sameAccountHistory?.profile_id || preferredProfile) + " 沟通过（" + esc((sameAccountHistory?.created_at || "").slice(0, 10)) + "）"}；再次点击会先拦截确认，若仅需发送图片简历请点「🖼️ 补发图片简历」。</span></div>` : ""}
 
     <div class="inspector-tabs" role="tablist" aria-label="岗位详情切换">
       <button type="button" role="tab" id="itab-match" aria-selected="${state.inspectorTab === "match"}">一键打招呼与岗位详情</button>
@@ -693,7 +713,7 @@ async function renderInspector(fetchFresh = false) {
                 ? `<button type="button" class="btn btn-secondary btn-sm" id="insp-send-img-only" ${job.blacklisted ? "disabled" : ""}>🖼️ 补发图片简历</button>`
                 : ""}
               <button type="button" class="btn btn-boss btn-lg" id="insp-deliver-main" ${job.blacklisted ? "disabled" : ""}>
-                💬 一键打招呼${defaultSendImg ? "（附图片简历）" : ""}
+                ${alreadyContacted ? "🔁 再次打招呼（已沟通过）" : `💬 一键打招呼${defaultSendImg ? "（附图片简历）" : ""}`}
               </button>
             </div>
           </div>
@@ -821,6 +841,10 @@ async function renderInspector(fetchFresh = false) {
   const updateDeliverBtnText = () => {
     const auto = autoSendChk.checked;
     const withImg = sendImgChk.checked && resumeImg.exists;
+    if (alreadyContacted) {
+      mainDeliverBtn.textContent = "🔁 再次打招呼（已沟通过）";
+      return;
+    }
     if (!auto) {
       mainDeliverBtn.textContent = "↗ 跳转聊天页（预填话术）";
     } else if (withImg) {
@@ -979,6 +1003,10 @@ async function renderInspector(fetchFresh = false) {
     if (chosenConflict && !confirm(`该公司此前已用 ${chosenConflict.profile_id} 联系过，确定改用 ${profileId} 重复触达吗？`)) {
       return;
     }
+    const sameRepeat = !onlySendImage && (CONTACTED_STATUSES.has(job.status) || (job.company_history || []).some((h) => h.profile_id === profileId));
+    if (sameRepeat && !confirm(`防重复提醒：当前账号（${profileId}）此前已对「${job.company_name}」沟通过，确认还要再次发送打招呼语吗？\n\n（如果只是补发简历图片，请点取消并直接点击左侧「🖼️ 补发图片简历」）`)) {
+      return;
+    }
     const autoSend = onlySendImage ? true : autoSendChk.checked;
     const sendImageResume = onlySendImage ? true : (sendImgChk.checked && resumeImg.exists);
 
@@ -994,6 +1022,7 @@ async function renderInspector(fetchFresh = false) {
           sendImageResume,
           onlySendImage,
           forceCrossTrack: Boolean(chosenConflict),
+          forceRepeat: Boolean(sameRepeat),
         }),
       });
       if (res.status === "VERIFICATION_REQUIRED") {
@@ -1684,6 +1713,158 @@ function renderSettings() {
   if (settings.min_hr_active && els.scrapeHrActive) els.scrapeHrActive.value = settings.min_hr_active;
 }
 
+function deliveryLogBadgesHtml(l) {
+  const txtBadge = l.action === "BOSS_ALREADY_CONTACTED" || l.action === "BOSS_HISTORY_SYNC"
+    ? `<span class="zone-tag zone-GREEN">🛡️ Boss历史已沟通</span>`
+    : l.text_sent || l.status === "DELIVERED"
+      ? `<span class="zone-tag zone-GREEN">📝 文字招呼：已发</span>`
+      : l.status === "PREPARED"
+        ? `<span class="zone-tag zone-YELLOW">✋ 预填待发</span>`
+        : `<span class="zone-tag zone-RED">⚠️ 未发出/待验证</span>`;
+
+  const imgState = l.image_sent ? "SENT" : (l.image_status || l.job_image_delivery || "NONE");
+  const imgBadge = imgState === "SENT"
+    ? `<span class="zone-tag zone-GREEN">🖼️ 图片简历：已发</span>`
+    : imgState === "PENDING_REPLY"
+      ? `<span class="zone-tag zone-YELLOW">⏳ 待回复补发图片</span>`
+      : `<span class="meta-pill">未附图片简历</span>`;
+
+  return `${txtBadge} ${imgBadge}`;
+}
+
+function renderDeliveries() {
+  if (!els.deliveriesList || !els.deliveryKpiStrip) return;
+  const logs = state.data?.logs || [];
+  const deliveredLogs = logs.filter((l) => l.status === "DELIVERED");
+  const uniqueCompanies = new Set(deliveredLogs.map((l) => l.normalized_company || l.company_name)).size;
+  const textSentCount = logs.filter((l) => l.text_sent || (l.status === "DELIVERED" && l.action !== "SEND_IMAGE_ONLY")).length;
+  const imgSentCount = logs.filter((l) => l.image_sent || l.job_image_delivery === "SENT").length;
+  const pendingImgJobs = new Set(
+    (state.data?.jobs || [])
+      .filter((j) => CONTACTED_STATUSES.has(j.status) && j.tailored_resume?.image_delivery === "PENDING_REPLY")
+      .map((j) => j.id)
+  ).size;
+
+  els.deliveryKpiStrip.innerHTML = `
+    <div class="funnel-card">
+      <strong>累计沟通企业</strong>
+      <div style="font-size:16px;font-weight:700;">${esc(uniqueCompanies)} 家 <span class="muted" style="font-size:12px;">(${esc(deliveredLogs.length)} 次记录)</span></div>
+      <div class="muted">自动拦截同号/跨号重复</div>
+    </div>
+    <div class="funnel-card">
+      <strong>📝 已发文字招呼</strong>
+      <div style="font-size:16px;font-weight:700;color:var(--accent-teal);">${esc(textSentCount)} 次</div>
+      <div class="muted">含同步的 Boss 历史聊天</div>
+    </div>
+    <div class="funnel-card">
+      <strong>🖼️ 已发图片简历</strong>
+      <div style="font-size:16px;font-weight:700;color:var(--green-fg);">${esc(imgSentCount)} 次</div>
+      <div class="muted">聊天内直接发出高清图片</div>
+    </div>
+    <div class="funnel-card">
+      <strong>⏳ 待回复补发图片</strong>
+      <div style="font-size:16px;font-weight:700;color:var(--yellow-fg);">${esc(pendingImgJobs)} 个岗位</div>
+      <div class="muted">HR 回复后可点下方按钮秒发</div>
+    </div>
+  `;
+
+  if (els.deliveryProfileFilter) {
+    const profiles = [...new Set(logs.map((l) => l.profile_id).filter(Boolean))];
+    const prev = state.deliveryProfile;
+    els.deliveryProfileFilter.innerHTML = `<option value="ALL">全部账号</option>`
+      + profiles.map((pid) => `<option value="${esc(pid)}" ${prev === pid ? "selected" : ""}>${esc(pid)}</option>`).join("");
+  }
+
+  const q = state.deliverySearch.trim().toLowerCase();
+  const filtered = logs.filter((l) => {
+    if (state.deliveryProfile !== "ALL" && l.profile_id !== state.deliveryProfile) return false;
+    const imgState = l.image_sent ? "SENT" : (l.image_status || l.job_image_delivery || "NONE");
+    if (state.deliveryFilter === "WITH_IMAGE" && !(l.status === "DELIVERED" && imgState === "SENT")) return false;
+    if (state.deliveryFilter === "PENDING_IMAGE" && imgState !== "PENDING_REPLY") return false;
+    if (state.deliveryFilter === "VERIFICATION" && l.status === "DELIVERED") return false;
+    if (q) {
+      const hay = `${l.company_name} ${l.job_title} ${l.profile_id} ${l.greeting_text} ${l.detail}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    els.deliveriesList.innerHTML = `<p class="muted">当前筛选下暂无沟通记录；在岗位页点击「一键打招呼」或点右上角「同步 Boss 历史已沟通」即可写入。</p>`;
+    return;
+  }
+
+  const hasResumeImg = Boolean(state.data?.resume_image?.exists);
+  els.deliveriesList.innerHTML = filtered
+    .map((l) => {
+      const imgDone = l.image_sent || l.job_image_delivery === "SENT";
+      const canSendImg = Boolean(l.job_id && hasResumeImg && !imgDone && l.status === "DELIVERED");
+      return `
+        <article class="delivery-card">
+          <div class="delivery-card-head">
+            <div>
+              <strong>${esc(l.company_name)}</strong>${l.job_title ? ` · <span>${esc(l.job_title)}</span>` : ""}
+              ${l.salary_range ? ` <span class="meta-pill">${esc(l.salary_range)}</span>` : ""}
+              <span class="muted" style="margin-left:6px;">${esc(l.profile_id)} · ${esc(fmtTime(l.created_at))}</span>
+            </div>
+            <div class="delivery-card-badges">
+              ${deliveryLogBadgesHtml(l)}
+            </div>
+          </div>
+          ${l.greeting_text ? `<div class="delivery-quote">${esc(l.greeting_text)}</div>` : ""}
+          <div class="delivery-card-actions">
+            <span class="muted" style="font-size:12px;">${esc(l.detail || "")}</span>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              ${l.job_id ? `<button type="button" class="btn btn-secondary btn-xs" data-deliv-jump="${l.job_id}">查看岗位详情</button>` : ""}
+              ${canSendImg ? `<button type="button" class="btn btn-primary btn-xs" data-deliv-send-img="${l.job_id}" data-deliv-profile="${esc(l.profile_id)}">🖼️ 补发图片简历</button>` : ""}
+              ${l.job_id ? `<button type="button" class="btn btn-ghost btn-xs" data-deliv-open="${l.job_id}" data-deliv-profile="${esc(l.profile_id)}">在 Ego 打开</button>` : ""}
+            </div>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+
+  els.deliveriesList.querySelectorAll("[data-deliv-jump]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.selectedJobId = Number(btn.dataset.delivJump);
+      switchView("jobs");
+      renderJobList();
+      renderInspector(true);
+    });
+  });
+
+  els.deliveriesList.querySelectorAll("[data-deliv-open]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await api(`/api/jobs/${btn.dataset.delivOpen}/open`, {
+        method: "POST",
+        body: JSON.stringify({ profileId: btn.dataset.delivProfile }),
+      }).catch((err) => alert(err.message));
+    });
+  });
+
+  els.deliveriesList.querySelectorAll("[data-deliv-send-img]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const jobId = btn.dataset.delivSendImg;
+      const pid = btn.dataset.delivProfile;
+      setWorkerBusy(true, `正在用 ${pid} 补发高清图片简历...`);
+      try {
+        const res = await api(`/api/jobs/${jobId}/deliver`, {
+          method: "POST",
+          body: JSON.stringify({ profileId: pid, onlySendImage: true, autoSend: true, sendImageResume: true }),
+        });
+        if (res.status === "VERIFICATION_REQUIRED") showVerifyBanner(res);
+        else els.liveLogLatest.textContent = res.delivery?.message || "已完成补发图片尝试";
+        await refreshState();
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        setWorkerBusy(false);
+      }
+    });
+  });
+}
+
 function renderDeliveryLogs() {
   const logs = state.data?.logs || [];
   if (logs.length === 0) {
@@ -1691,14 +1872,58 @@ function renderDeliveryLogs() {
     return;
   }
   els.deliveryLogsList.innerHTML = logs
+    .slice(0, 30)
     .map((l) => `
       <div class="log-item">
-        <strong>${esc(l.company_name)}</strong> · ${esc(l.profile_id)} · <span class="meta-pill">${esc(STATUS_LABELS[l.status] || l.status)}</span>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <span><strong>${esc(l.company_name)}</strong>${l.job_title ? ` · ${esc(l.job_title)}` : ""} · ${esc(l.profile_id)}</span>
+          <span>${deliveryLogBadgesHtml(l)}</span>
+        </div>
         <div class="muted">${esc(fmtTime(l.created_at))} — ${esc(l.detail)}</div>
       </div>
     `)
     .join("");
 }
+
+document.querySelectorAll(".seg-btn[data-delivery-filter]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".seg-btn[data-delivery-filter]").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.deliveryFilter = btn.dataset.deliveryFilter;
+    renderDeliveries();
+  });
+});
+
+els.deliveryProfileFilter?.addEventListener("change", () => {
+  state.deliveryProfile = els.deliveryProfileFilter.value;
+  renderDeliveries();
+});
+
+els.deliverySearchInput?.addEventListener("input", () => {
+  state.deliverySearch = els.deliverySearchInput.value;
+  renderDeliveries();
+});
+
+els.btnSyncBossChats?.addEventListener("click", async () => {
+  setWorkerBusy(true, "正在从 Boss 聊天列表同步历史已沟通公司...");
+  try {
+    const res = await api("/api/deliveries/sync-boss", { method: "POST", body: JSON.stringify({}) });
+    if (res.status === "VERIFICATION_REQUIRED") {
+      showVerifyBanner(res);
+    } else {
+      const msg = res.syncedCount > 0
+        ? `🔄 同步完成，新增识别 ${res.syncedCount} 条历史沟通记录（${(res.matchedCompanies || []).slice(0, 3).join("、")}）`
+        : "🔄 同步完成，暂无新的未记录历史沟通。";
+      els.liveLogLatest.textContent = msg;
+      alert(msg);
+    }
+    await refreshState();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    setWorkerBusy(false);
+  }
+});
 
 // Watchlist drawer handlers
 els.btnAddWatchlist.addEventListener("click", () => {

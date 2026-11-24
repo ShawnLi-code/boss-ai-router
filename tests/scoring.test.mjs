@@ -6,7 +6,7 @@ import { DEFAULT_TARGET_ROLES, evaluateJobEligibility, evaluateSalaryFit, factGu
 import { calculateBikePlusMetroMetrics } from "../src/commute.mjs";
 import fs from "node:fs";
 import path from "node:path";
-import { RESUME_ASSETS_DIR, db, getResumeImageMeta, getScrapeTelemetry, listKnownExternalIds, listPatrolRuns, normalizeCompanyRoot, recordPatrolRun, saveResumeImageMeta } from "../src/db.mjs";
+import { RESUME_ASSETS_DIR, addDeliveryLog, db, getCompanyDeliveryHistory, getResumeImageMeta, getScrapeTelemetry, listDeliveryLogs, listKnownExternalIds, listPatrolRuns, normalizeCompanyRoot, recordPatrolRun, saveResumeImageMeta, upsertJob } from "../src/db.mjs";
 import { buildBossSearchUrl, isBossVerificationUrl } from "../src/ego-worker.mjs";
 import { compareSemver } from "../src/updater.mjs";
 
@@ -596,6 +596,47 @@ test("Boss安全验证识别：不误判 job_detail?securityId=，准确拦截�
   assert.equal(isBossVerificationUrl("https://www.zhipin.com/web/user/?ka=header-login", "Boss直聘"), true);
   assert.equal(isBossVerificationUrl("https://www.zhipin.com/web/common/security-check.html", "请完成安全验证"), true);
   assert.equal(isBossVerificationUrl(normalJobUrl, "请完成安全验证 拖动滑块"), true);
+});
+
+test("沟通记录持久化和防重复检测：记录文字/图片状态并拦截同司重复", () => {
+  const extId = `mock-deliv-${Date.now()}`;
+  const job = upsertJob({
+    external_id: extId,
+    job_title: "AI应用测试工程师",
+    company_name: "测试防重科技有限责任公司",
+    city: "广州",
+  });
+  let logId = null;
+  try {
+    const log = addDeliveryLog({
+      job_id: job.id,
+      company_name: job.company_name,
+      job_title: job.job_title,
+      track_key: "B",
+      profile_id: "Profile 1",
+      action: "AUTO_SEND",
+      greeting_text: "您好，对贵司测试岗很感兴趣！",
+      text_sent: true,
+      image_sent: false,
+      image_status: "PENDING_REPLY",
+      status: "DELIVERED",
+      detail: "已发文字，待回复补发图片",
+    });
+    logId = log.id;
+    const rows = listDeliveryLogs(20);
+    const found = rows.find((r) => r.id === log.id);
+    assert.ok(found);
+    assert.equal(found.job_title, "AI应用测试工程师");
+    assert.equal(found.text_sent, true);
+    assert.equal(found.image_sent, false);
+    assert.equal(found.image_status, "PENDING_REPLY");
+
+    const hist = getCompanyDeliveryHistory("测试防重科技（广州）分公司");
+    assert.ok(hist.some((h) => h.job_id === job.id));
+  } finally {
+    if (logId) db.prepare("DELETE FROM delivery_logs WHERE id = ?").run(logId);
+    db.prepare("DELETE FROM jobs WHERE id = ?").run(job.id);
+  }
 });
 
 

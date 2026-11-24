@@ -899,6 +899,7 @@ export async function prepareBossDelivery({
   sendImageResume = true,
   imagePath = "",
   onlySendImage = false,
+  allowAlreadyContacted = false,
   onLog = () => {},
 }) {
   const targetUrl =
@@ -969,10 +970,12 @@ const inputSelector = "div.chat-input[contenteditable='true'], textarea.input-ar
 const hasInput = await page.waitForSelector(inputSelector, { state: "visible", timeout: 8000 }).then(() => true).catch(() => false);
 
 const shouldAutoSend = ${JSON.stringify(Boolean(autoSend))};
-const shouldSendText = ${JSON.stringify(Boolean(!onlySendImage && greetingText))};
+const allowAlreadyContacted = ${JSON.stringify(Boolean(allowAlreadyContacted))};
+const alreadyContactedOnBoss = Boolean(${JSON.stringify(!onlySendImage)} && !allowAlreadyContacted && verifyState.chatBtnText.includes("继续沟通"));
+const shouldSendText = Boolean(${JSON.stringify(Boolean(!onlySendImage && greetingText))} && !alreadyContactedOnBoss);
 const shouldSendImg = ${JSON.stringify(Boolean(hasImage))};
 const imgFilePath = ${JSON.stringify(normalizedImagePath)};
-let textSent = false;
+let textSent = alreadyContactedOnBoss;
 let imageSent = false;
 let imageBlockedReason = "";
 
@@ -1060,6 +1063,25 @@ if (shouldSendImg) {
   }
 }
 
+if (alreadyContactedOnBoss) {
+  const finalUrl = await page.url().catch(() => "");
+  await task.finish({ keep: [] });
+  const message = imageSent
+    ? "🛡️ 检测到 Boss 之前已与该岗位沟通过（「继续沟通」），已跳过重复发文字并直接补发图片简历！"
+    : "🛡️ 检测到 Boss 上此前已和该岗位沟通过（「继续沟通」），已拦截重复发招呼语并自动同步记录";
+  console.log("RESULT_JSON:" + JSON.stringify({
+    status: "ALREADY_CONTACTED_ON_BOSS",
+    alreadyContactedOnBoss: true,
+    textSent: true,
+    imageSent,
+    imageBlockedReason,
+    taskSpaceId: task.spaceId,
+    url: finalUrl,
+    message,
+  }));
+  process.exit(0);
+}
+
 if (shouldAutoSend && (textSent || imageSent)) {
   const finalUrl = await page.url().catch(() => "");
   await task.finish({ keep: [] });
@@ -1107,6 +1129,94 @@ console.log("RESULT_JSON:" + JSON.stringify({
     const { combined } = await runEgoScript("prepare-delivery", code, 95_000);
     const res = parseMarkedJson(combined);
     onLog(`📨 ${res.message}`);
+    return res;
+  } finally {
+    releaseLock();
+  }
+}
+
+export async function syncBossContactedChats({ profileId, maxItems = 60, onLog = () => {} }) {
+  acquireLock(`同步 Boss 历史沟通记录 (${profileId})`);
+  try {
+    onLog(`正在打开 ${profileId} 的 Boss 聊天列表核对历史已沟通公司...`);
+    const code = `
+const randDelay = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
+const task = await taskSpace("boss-sync-chats-" + Date.now(), { profileId: ${JSON.stringify(profileId)} });
+let handedOff = false;
+try {
+  const page = (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
+  await page.goto("https://www.zhipin.com/web/geek/chat", { waitUntil: "domcontentloaded", timeout: 25000 });
+  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+  await page.waitForTimeout(randDelay(2200, 3200));
+
+  const verify = await page.evaluate(() => {
+    const body = (document.body?.innerText || "").slice(0, 600);
+    return /verify-slider|security-check|\\/security(?:\\/|$)|\\/web\\/user/i.test(location.pathname)
+      || /请完成安全验证|拖动滑块|点击按钮进行验证|访问异常|账号异常|扫码登录/.test(body);
+  });
+  if (verify) {
+    handedOff = true;
+    const url = await page.url().catch(() => "");
+    await task.handOff();
+    console.log("RESULT_JSON:" + JSON.stringify({
+      status: "VERIFICATION_REQUIRED",
+      taskSpaceId: task.spaceId,
+      url,
+      chats: [],
+      message: "同步 Boss 沟通列表需要登录或安全验证，请在 Ego 完成后重试",
+    }));
+    process.exit(0);
+  }
+
+  for (let s = 0; s < 3; s++) {
+    await page.evaluate(() => {
+      const box = document.querySelector(".user-list, .chat-user, .geek-list");
+      if (box) box.scrollTop += 600;
+    }).catch(() => {});
+    await page.waitForTimeout(700);
+  }
+
+  const chats = await page.evaluate((limit) => {
+    const nodes = [...document.querySelectorAll(".user-list .friend-content, .chat-user .friend-content, li.friend-content, .geek-item, [class*='friend-item']")];
+    const seen = new Set();
+    const out = [];
+    for (const el of nodes) {
+      if (out.length >= limit) break;
+      const vueData = el.__vue__?.data || el.parentElement?.__vue__?.data || {};
+      const lines = (el.innerText || "").split(/\\n+/).map((x) => x.trim()).filter(Boolean);
+      const companyName = String(vueData.brandName || vueData.companyName || "").trim();
+      const jobTitle = String(vueData.positionName || vueData.jobName || "").trim();
+      const recruiterName = String(vueData.name || vueData.geekName || lines[0] || "").trim();
+      const lastMsg = String(vueData.lastMsg || lines[lines.length - 1] || "").trim();
+      const guessedCompany = companyName || (lines.find((l) => l.includes("·"))?.split("·").pop()?.trim() || "");
+      const key = (guessedCompany + "|" + jobTitle + "|" + recruiterName).toLowerCase();
+      if (!guessedCompany && !lines.length) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        company_name: guessedCompany,
+        job_title: jobTitle,
+        recruiter_name: recruiterName,
+        last_msg: lastMsg,
+        raw_text: lines.join(" | ").slice(0, 140),
+      });
+    }
+    return out;
+  }, ${Number(maxItems) || 60});
+
+  await task.finish({ keep: [] });
+  console.log("RESULT_JSON:" + JSON.stringify({ status: "OK", chats }));
+} finally {
+  if (!handedOff) {
+    await task.finish({ keep: [] }).catch(() => {});
+  }
+}
+`;
+    const { combined } = await runEgoScript("sync-chats", code, 75_000);
+    const res = parseMarkedJson(combined);
+    if (res.status === "OK") {
+      onLog(`✅ ${profileId} 已读取 ${(res.chats || []).length} 条最近 Boss 聊天会话`);
+    }
     return res;
   } finally {
     releaseLock();

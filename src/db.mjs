@@ -186,6 +186,10 @@ ensureColumn("jobs", "latitude", "REAL");
 ensureColumn("jobs", "customer_brand", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("jobs", "commute_json", "TEXT NOT NULL DEFAULT '{}'");
 ensureColumn("delivery_logs", "normalized_company", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("delivery_logs", "job_title", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("delivery_logs", "text_sent", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("delivery_logs", "image_sent", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("delivery_logs", "image_status", "TEXT NOT NULL DEFAULT 'NONE'");
 
 const now = () => new Date().toISOString();
 export const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -207,6 +211,14 @@ db.prepare("SELECT id, company_name FROM jobs WHERE normalized_company = ''").al
 db.prepare("SELECT id, company_name FROM delivery_logs WHERE normalized_company = ''").all().forEach((r) => {
   db.prepare("UPDATE delivery_logs SET normalized_company = ? WHERE id = ?").run(normalizeCompanyRoot(r.company_name), r.id);
 });
+db.exec(`
+  UPDATE delivery_logs
+  SET job_title = COALESCE((SELECT j.job_title FROM jobs j WHERE j.id = delivery_logs.job_id), '')
+  WHERE job_title = '';
+  UPDATE delivery_logs
+  SET text_sent = 1
+  WHERE status = 'DELIVERED' AND text_sent = 0 AND action != 'SEND_IMAGE_ONLY';
+`);
 
 function seedDefaults() {
   const existingTracks = db.prepare("SELECT COUNT(*) AS cnt FROM account_tracks").get().cnt;
@@ -782,37 +794,93 @@ export function getCompanyDeliveryHistory(companyName) {
     WHERE status IN ('DELIVERED', 'PREPARED')
     ORDER BY id DESC
   `).all();
-  return rows.filter((r) => {
+  const matchedLogs = rows.filter((r) => {
     const rRoot = r.normalized_company || normalizeCompanyRoot(r.company_name);
     return r.company_name === companyName || (root && rRoot && (rRoot === root || rRoot.includes(root) || root.includes(rRoot)));
   });
+
+  // 兜底检查 jobs 表中已标记沟通但可能尚未写入 delivery_logs 的历史记录
+  const jobRows = db.prepare(`
+    SELECT id AS job_id, job_title, company_name, normalized_company, assigned_profile_id, source_profile_id, status, updated_at AS created_at
+    FROM jobs
+    WHERE status IN ('DELIVERED', 'REPLIED', 'INTERVIEW')
+  `).all();
+  const seenJobIds = new Set(matchedLogs.map((r) => r.job_id));
+  for (const j of jobRows) {
+    if (seenJobIds.has(j.job_id)) continue;
+    const jRoot = j.normalized_company || normalizeCompanyRoot(j.company_name);
+    if (j.company_name === companyName || (root && jRoot && (jRoot === root || jRoot.includes(root) || root.includes(jRoot)))) {
+      matchedLogs.push({
+        id: 0,
+        job_id: j.job_id,
+        job_title: j.job_title,
+        company_name: j.company_name,
+        normalized_company: jRoot,
+        profile_id: j.assigned_profile_id || j.source_profile_id || "Profile 1",
+        status: "DELIVERED",
+        action: "JOB_STATUS",
+        created_at: j.created_at,
+      });
+    }
+  }
+  return matchedLogs;
 }
 
-export function listDeliveryLogs(limit = 100) {
-  return db.prepare("SELECT * FROM delivery_logs ORDER BY id DESC LIMIT ?").all(limit);
+export function listDeliveryLogs(limit = 300) {
+  return db.prepare(`
+    SELECT
+      d.*,
+      COALESCE(NULLIF(d.job_title, ''), j.job_title, '') AS job_title,
+      COALESCE(j.status, '') AS current_job_status,
+      COALESCE(j.job_url, '') AS job_url,
+      COALESCE(j.salary_range, '') AS salary_range,
+      COALESCE(j.tailored_resume_json, '{}') AS tailored_resume_json
+    FROM delivery_logs d
+    LEFT JOIN jobs j ON j.id = d.job_id
+    ORDER BY d.id DESC
+    LIMIT ?
+  `).all(limit).map((r) => {
+    let tailored = {};
+    try { tailored = JSON.parse(r.tailored_resume_json || "{}"); } catch {}
+    return {
+      ...r,
+      text_sent: Boolean(r.text_sent),
+      image_sent: Boolean(r.image_sent),
+      job_image_delivery: tailored.image_delivery || "NONE",
+    };
+  });
 }
 
 export function countTodayDeliveries(profileId) {
   const todayPrefix = todayStr();
   return db.prepare(`
     SELECT COUNT(*) AS cnt FROM delivery_logs
-    WHERE profile_id = ? AND status = 'DELIVERED' AND created_at LIKE ?
+    WHERE profile_id = ? AND status = 'DELIVERED'
+      AND action NOT IN ('SEND_IMAGE_ONLY', 'BOSS_HISTORY_SYNC', 'MANUAL_SYNC')
+      AND created_at LIKE ?
   `).get(profileId, `${todayPrefix}%`).cnt;
 }
 
 export function addDeliveryLog(entry) {
   const ts = now();
   const info = db.prepare(`
-    INSERT INTO delivery_logs (job_id, company_name, normalized_company, track_key, profile_id, action, greeting_text, status, detail, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO delivery_logs (
+      job_id, company_name, normalized_company, job_title, track_key, profile_id,
+      action, greeting_text, text_sent, image_sent, image_status, status, detail, created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     entry.job_id,
     entry.company_name,
     normalizeCompanyRoot(entry.company_name),
-    entry.track_key,
+    entry.job_title ?? "",
+    entry.track_key ?? "A",
     entry.profile_id,
     entry.action,
     entry.greeting_text ?? "",
+    entry.text_sent ? 1 : 0,
+    entry.image_sent ? 1 : 0,
+    entry.image_status ?? "NONE",
     entry.status,
     entry.detail ?? "",
     ts

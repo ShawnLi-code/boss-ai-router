@@ -28,6 +28,10 @@
         <button type="button" class="nav-item" data-view="resumes">
           <span>我的简历</span>
         </button>
+        <button type="button" class="nav-item" data-view="deliveries">
+          <span>沟通记录</span>
+          <span class="nav-count" id="nav-deliveries-count">0</span>
+        </button>
         <button type="button" class="nav-item" data-view="funnel">
           <span>抓取记录与黑名单</span>
         </button>
@@ -195,6 +199,42 @@
       <!-- VIEW 2: Boss-Style Online Resume + Image Resume Sidebar -->
       <section id="view-resumes" class="view-pane scroll-pane" hidden>
         <div id="resumes-container" class="boss-resume-layout"></div>
+      </section>
+
+      <!-- VIEW 2.5: Delivery & Communication History + Anti-Duplicate Ledger -->
+      <section id="view-deliveries" class="view-pane scroll-pane" hidden>
+        <div class="view-header">
+          <div>
+            <h2>沟通记录与防重复台账</h2>
+            <p class="muted">持久保存每次打招呼、图片简历发送状态与招呼语原文；自动拦截同号/跨号重复沟通，并支持从 Boss 同步历史已沟通会话。</p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button type="button" id="btn-sync-boss-chats" class="btn btn-primary btn-sm">🔄 同步 Boss 历史已沟通</button>
+            <a class="btn btn-secondary btn-sm" href="/api/export" download>导出备份 JSON</a>
+          </div>
+        </div>
+
+        <div id="delivery-kpi-strip" class="funnel-grid" style="margin-bottom:14px;"></div>
+
+        <section class="surface-box">
+          <div class="subbar" style="padding:0 0 12px;border-bottom:1px solid var(--border-line);margin-bottom:12px;">
+            <div class="segmented" role="group" aria-label="沟通记录筛选">
+              <button type="button" class="seg-btn active" data-delivery-filter="ALL">全部记录</button>
+              <button type="button" class="seg-btn" data-delivery-filter="WITH_IMAGE">🟢 文字+图片已发</button>
+              <button type="button" class="seg-btn" data-delivery-filter="PENDING_IMAGE">🟡 待回复补发图片</button>
+              <button type="button" class="seg-btn" data-delivery-filter="VERIFICATION">⚠️ 待验证/未发</button>
+            </div>
+            <div class="subbar-right">
+              <select id="delivery-profile-filter" aria-label="按账号筛选" class="input-compact">
+                <option value="ALL">全部账号</option>
+              </select>
+              <input type="search" id="delivery-search-input" placeholder="搜公司 / 岗位 / 招呼语..." aria-label="搜索沟通记录" class="input-compact" style="width:200px;">
+            </div>
+          </div>
+          <div class="deliveries-feed" id="deliveries-list">
+            <p class="muted">暂无沟通记录。</p>
+          </div>
+        </section>
       </section>
 
       <!-- VIEW 3: Scrape Records, Funnel & Blacklist -->
