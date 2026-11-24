@@ -252,12 +252,11 @@
         <section class="surface-box">
           <div class="subbar" style="padding:0 0 12px;border-bottom:1px solid var(--border-line);margin-bottom:12px;">
             <div class="segmented" role="group" aria-label="沟通记录筛选">
-              <button type="button" class="seg-btn active" data-delivery-filter="ALL">全部记录 <span id="dcnt-all">0</span></button>
-              <button type="button" class="seg-btn" data-delivery-filter="TEXT_ONLY">📝 仅发文字 <span id="dcnt-text-only">0</span></button>
-              <button type="button" class="seg-btn" data-delivery-filter="REPLIED">📩 HR已回复 <span id="dcnt-replied">0</span></button>
-              <button type="button" class="seg-btn" data-delivery-filter="WITH_IMAGE">🟢 文字+图片已发 <span id="dcnt-with-img">0</span></button>
-              <button type="button" class="seg-btn" data-delivery-filter="PENDING_IMAGE">🟡 待回复补发 <span id="dcnt-pending-img">0</span></button>
-              <button type="button" class="seg-btn" data-delivery-filter="VERIFICATION">⚠️ 待验证/未发 <span id="dcnt-verify">0</span></button>
+              <button type="button" class="seg-btn active" data-delivery-filter="ALL">全部对话 <span id="dcnt-all">0</span></button>
+              <button type="button" class="seg-btn" data-delivery-filter="TEXT_ONLY">📝 已发送文字 <span id="dcnt-text-only">0</span></button>
+              <button type="button" class="seg-btn" data-delivery-filter="WITH_IMAGE">🖼️ 已发送文字+图片 <span id="dcnt-with-img">0</span></button>
+              <button type="button" class="seg-btn" data-delivery-filter="HR_INITIATED">📩 HR主动打招呼 <span id="dcnt-hr-init">0</span></button>
+              <button type="button" class="seg-btn" data-delivery-filter="MUTUAL">💬 已回复互聊 <span id="dcnt-mutual">0</span></button>
             </div>
             <div class="subbar-right">
               <select id="delivery-profile-filter" aria-label="按账号筛选" class="input-compact">

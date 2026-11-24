@@ -535,10 +535,10 @@ function commuteTagHtml(job) {
 function deliveryBadgeHtml(job) {
   const imgDel = job.tailored_resume?.image_delivery;
   if (imgDel === "SENT") {
-    return `<span class="zone-tag zone-GREEN">已发招呼+图片简历</span>`;
+    return `<span class="zone-tag zone-GREEN">已发送文字+图片</span>`;
   }
-  if (imgDel === "PENDING_REPLY") {
-    return `<span class="zone-tag zone-YELLOW">已打招呼·待补发图片</span>`;
+  if (CONTACTED_STATUSES.has(job.status)) {
+    return `<span class="zone-tag zone-GREEN">${esc(STATUS_LABELS[job.status] || "已发送文字")}</span>`;
   }
   return `<span class="muted" style="margin-left:auto;">${esc(STATUS_LABELS[job.status] || job.status)}</span>`;
 }
@@ -1806,135 +1806,178 @@ function renderSettings() {
   if (settings.min_hr_active && els.scrapeHrActive) els.scrapeHrActive.value = settings.min_hr_active;
 }
 
-function deliveryLogBadgesHtml(l) {
-  const hrReplied = l.current_job_status === "REPLIED" || String(l.detail || "").includes("HR已回复");
-  const txtBadge = hrReplied
-    ? `<span class="zone-tag zone-GREEN">📩 HR已回复</span>`
-    : l.action === "BOSS_ALREADY_CONTACTED" || l.action === "BOSS_HISTORY_SYNC"
-      ? `<span class="zone-tag zone-GREEN">🛡️ Boss历史已沟通</span>`
-      : l.text_sent || l.status === "DELIVERED"
-        ? `<span class="zone-tag zone-GREEN">📝 文字招呼：已发</span>`
-        : l.status === "PREPARED"
-          ? `<span class="zone-tag zone-YELLOW">✋ 预填待发</span>`
-          : `<span class="zone-tag zone-RED">⚠️ 未发出/待验证</span>`;
+function buildConversationLedger() {
+  const logs = (state.data?.logs || []).filter((l) => l.status === "DELIVERED");
+  const jobsMap = new Map((state.data?.jobs || []).map((j) => [j.id, j]));
+  const groups = new Map();
 
-  const imgState = l.image_sent ? "SENT" : (l.image_status || l.job_image_delivery || "NONE");
-  const imgBadge = imgState === "SENT"
-    ? `<span class="zone-tag zone-GREEN">🖼️ 图片简历：已发</span>`
-    : imgState === "PENDING_REPLY"
-      ? `<span class="zone-tag zone-YELLOW">⏳ 待回复补发图片</span>`
-      : `<span class="meta-pill">未附图片简历</span>`;
+  for (const l of logs) {
+    const key = l.job_id ? `job:${l.job_id}` : `comp:${l.normalized_company || l.company_name}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(l);
+  }
 
-  return `${txtBadge} ${imgBadge}`;
+  const items = [];
+  for (const [, rows] of groups) {
+    // rows are ordered DESC (newest first)
+    const latest = rows[0];
+    const job = latest.job_id ? jobsMap.get(latest.job_id) : null;
+    const msgs = Array.isArray(job?.chat_messages) ? job.chat_messages.filter((m) => m && m.text) : [];
+    const hasMeInThread = msgs.some((m) => m.sender === "ME");
+    const hasHrInThread = msgs.some((m) => m.sender === "HR");
+    const sentByMeViaApp = rows.some((r) => ["AUTO_SEND", "PREFILL_HANDOFF", "FOLLOWUP_REPLY", "BOSS_ALREADY_CONTACTED", "MANUAL_SYNC"].includes(r.action));
+    const sentByMe = hasMeInThread || sentByMeViaApp || (!hasHrInThread && rows.some((r) => r.text_sent));
+    const hasHrMsg = hasHrInThread || rows.some((r) => String(r.detail || "").includes("HR已回复")) || job?.status === "REPLIED";
+    const hrInitiated = !sentByMe && hasHrMsg;
+    const mutualReplied = sentByMe && hasHrMsg;
+
+    const hasImg = rows.some((r) => r.image_sent || r.image_status === "SENT") || job?.tailored_resume?.image_delivery === "SENT";
+    const hasText = sentByMe;
+
+    let lastSender = "ME";
+    let lastText = "";
+    if (msgs.length > 0) {
+      const lastMsg = msgs[msgs.length - 1];
+      lastSender = lastMsg.sender === "HR" ? "HR" : "ME";
+      lastText = lastMsg.text;
+    } else {
+      lastSender = latest.action === "FOLLOWUP_REPLY" || latest.action === "AUTO_SEND" ? "ME" : (hasHrMsg ? "HR" : "ME");
+      lastText = latest.greeting_text || "";
+    }
+
+    items.push({
+      job_id: latest.job_id,
+      company_name: latest.company_name,
+      normalized_company: latest.normalized_company || latest.company_name,
+      job_title: latest.job_title || job?.job_title || "",
+      salary_range: latest.salary_range || job?.salary_range || "",
+      profile_id: latest.profile_id,
+      created_at: latest.created_at,
+      detail: latest.detail || "",
+      msgCount: msgs.length || rows.length,
+      sentByMe,
+      hasHrMsg,
+      hrInitiated,
+      mutualReplied,
+      hasImg,
+      hasText,
+      lastSender,
+      lastText,
+    });
+  }
+  return items;
+}
+
+function deliveryConvBadgesHtml(c) {
+  const stageBadge = c.hrInitiated
+    ? `<span class="zone-tag zone-YELLOW">📩 HR主动打招呼</span>`
+    : c.mutualReplied
+      ? `<span class="zone-tag zone-GREEN">💬 已回复互聊</span>`
+      : `<span class="zone-tag zone-GREEN">📤 我方已打招呼</span>`;
+
+  const materialBadge = c.hasImg
+    ? `<span class="zone-tag zone-GREEN">🖼️ 已发送文字+图片</span>`
+    : c.hasText
+      ? `<span class="meta-pill">📝 已发送文字</span>`
+      : `<span class="meta-pill">待我方首轮回复</span>`;
+
+  return `${stageBadge} ${materialBadge}`;
 }
 
 function renderDeliveries() {
   if (!els.deliveriesList || !els.deliveryKpiStrip) return;
-  const logs = state.data?.logs || [];
-  const deliveredLogs = logs.filter((l) => l.status === "DELIVERED");
-  const uniqueCompanies = new Set(deliveredLogs.map((l) => l.normalized_company || l.company_name)).size;
-  const textSentCount = logs.filter((l) => l.text_sent || (l.status === "DELIVERED" && l.action !== "SEND_IMAGE_ONLY")).length;
-  const imgSentCount = logs.filter((l) => l.image_sent || l.job_image_delivery === "SENT").length;
-  const pendingImgJobs = new Set(
-    (state.data?.jobs || [])
-      .filter((j) => CONTACTED_STATUSES.has(j.status) && j.tailored_resume?.image_delivery === "PENDING_REPLY")
-      .map((j) => j.id)
-  ).size;
+  const convs = buildConversationLedger();
+  const uniqueCompanies = new Set(convs.map((c) => c.normalized_company || c.company_name)).size;
+  const textOnlyCount = convs.filter((c) => c.hasText && !c.hasImg).length;
+  const textAndImgCount = convs.filter((c) => c.hasText && c.hasImg).length;
+  const hrInitCount = convs.filter((c) => c.hrInitiated).length;
+  const mutualCount = convs.filter((c) => c.mutualReplied).length;
 
   els.deliveryKpiStrip.innerHTML = `
     <div class="funnel-card">
-      <strong>累计沟通企业</strong>
-      <div style="font-size:16px;font-weight:700;">${esc(uniqueCompanies)} 家 <span class="muted" style="font-size:12px;">(${esc(deliveredLogs.length)} 次记录)</span></div>
-      <div class="muted">自动拦截同号/跨号重复</div>
+      <strong>累计沟通对话</strong>
+      <div style="font-size:16px;font-weight:700;">${esc(convs.length)} 个会话 <span class="muted" style="font-size:12px;">(${esc(uniqueCompanies)} 家企业)</span></div>
+      <div class="muted">同公司/同岗位合并展示，不重复建卡</div>
     </div>
     <div class="funnel-card">
-      <strong>📝 已发文字招呼</strong>
-      <div style="font-size:16px;font-weight:700;color:var(--accent-teal);">${esc(textSentCount)} 次</div>
-      <div class="muted">含同步的 Boss 历史聊天</div>
+      <strong>📝 已发送文字</strong>
+      <div style="font-size:16px;font-weight:700;color:var(--accent-teal);">${esc(textOnlyCount)} 个</div>
+      <div class="muted">已发打招呼或回复文字</div>
     </div>
     <div class="funnel-card">
-      <strong>🖼️ 已发图片简历</strong>
-      <div style="font-size:16px;font-weight:700;color:var(--green-fg);">${esc(imgSentCount)} 次</div>
-      <div class="muted">聊天内直接发出高清图片</div>
+      <strong>🖼️ 已发送文字+图片</strong>
+      <div style="font-size:16px;font-weight:700;color:var(--green-fg);">${esc(textAndImgCount)} 个</div>
+      <div class="muted">已附带发出高清图片简历</div>
     </div>
     <div class="funnel-card">
-      <strong>⏳ 待回复补发图片</strong>
-      <div style="font-size:16px;font-weight:700;color:var(--yellow-fg);">${esc(pendingImgJobs)} 个岗位</div>
-      <div class="muted">HR 回复后可点下方按钮秒发</div>
+      <strong>📩 主动 / 已回复状态</strong>
+      <div style="font-size:16px;font-weight:700;color:var(--yellow-fg);">HR主动 ${esc(hrInitCount)} · 互聊 ${esc(mutualCount)}</div>
+      <div class="muted">点卡片「连续沟通」对齐历史对话</div>
     </div>
   `;
 
   if (els.deliveryProfileFilter) {
-    const profiles = [...new Set(logs.map((l) => l.profile_id).filter(Boolean))];
+    const profiles = [...new Set(convs.map((c) => c.profile_id).filter(Boolean))];
     const prev = state.deliveryProfile;
     els.deliveryProfileFilter.innerHTML = `<option value="ALL">全部账号</option>`
       + profiles.map((pid) => `<option value="${esc(pid)}" ${prev === pid ? "selected" : ""}>${esc(pid)}</option>`).join("");
   }
 
   const q = state.deliverySearch.trim().toLowerCase();
-  const classifyLog = (l) => {
-    const isDelivered = l.status === "DELIVERED";
-    const imgDone = Boolean(l.image_sent || l.image_status === "SENT" || l.job_image_delivery === "SENT");
-    const imgPending = !imgDone && (l.image_status === "PENDING_REPLY" || l.job_image_delivery === "PENDING_REPLY");
-    const hrReplied = l.current_job_status === "REPLIED" || String(l.detail || "").includes("HR已回复");
-    return { isDelivered, imgDone, imgPending, hrReplied };
-  };
-
   const setCount = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = String(n); };
-  setCount("dcnt-all", logs.length);
-  setCount("dcnt-text-only", logs.filter((l) => { const c = classifyLog(l); return c.isDelivered && !c.imgDone; }).length);
-  setCount("dcnt-replied", logs.filter((l) => classifyLog(l).hrReplied).length);
-  setCount("dcnt-with-img", logs.filter((l) => { const c = classifyLog(l); return c.isDelivered && c.imgDone; }).length);
-  setCount("dcnt-pending-img", logs.filter((l) => classifyLog(l).imgPending).length);
-  setCount("dcnt-verify", logs.filter((l) => !classifyLog(l).isDelivered).length);
+  setCount("dcnt-all", convs.length);
+  setCount("dcnt-text-only", textOnlyCount);
+  setCount("dcnt-with-img", textAndImgCount);
+  setCount("dcnt-hr-init", hrInitCount);
+  setCount("dcnt-mutual", mutualCount);
 
-  const filtered = logs.filter((l) => {
-    if (state.deliveryProfile !== "ALL" && l.profile_id !== state.deliveryProfile) return false;
-    const c = classifyLog(l);
-    if (state.deliveryFilter === "TEXT_ONLY" && !(c.isDelivered && !c.imgDone)) return false;
-    if (state.deliveryFilter === "REPLIED" && !c.hrReplied) return false;
-    if (state.deliveryFilter === "WITH_IMAGE" && !(c.isDelivered && c.imgDone)) return false;
-    if (state.deliveryFilter === "PENDING_IMAGE" && !c.imgPending) return false;
-    if (state.deliveryFilter === "VERIFICATION" && c.isDelivered) return false;
+  const filtered = convs.filter((c) => {
+    if (state.deliveryProfile !== "ALL" && c.profile_id !== state.deliveryProfile) return false;
+    if (state.deliveryFilter === "TEXT_ONLY" && !(c.hasText && !c.hasImg)) return false;
+    if (state.deliveryFilter === "WITH_IMAGE" && !(c.hasText && c.hasImg)) return false;
+    if (state.deliveryFilter === "HR_INITIATED" && !c.hrInitiated) return false;
+    if (state.deliveryFilter === "MUTUAL" && !c.mutualReplied) return false;
     if (q) {
-      const hay = `${l.company_name} ${l.job_title} ${l.profile_id} ${l.greeting_text} ${l.detail}`.toLowerCase();
+      const hay = `${c.company_name} ${c.job_title} ${c.profile_id} ${c.lastText} ${c.detail}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
   });
 
   if (filtered.length === 0) {
-    els.deliveriesList.innerHTML = `<p class="muted">当前筛选下暂无沟通记录；在岗位页点击「一键打招呼」或点右上角「同步 Boss 历史已沟通」即可写入。</p>`;
+    els.deliveriesList.innerHTML = `<p class="muted">当前筛选下暂无沟通对话。</p>`;
     return;
   }
 
   const hasResumeImg = Boolean(state.data?.resume_image?.exists);
   els.deliveriesList.innerHTML = filtered
-    .map((l) => {
-      const imgDone = l.image_sent || l.job_image_delivery === "SENT";
-      const canSendImg = Boolean(l.job_id && hasResumeImg && !imgDone && l.status === "DELIVERED");
-      const hrReplied = l.current_job_status === "REPLIED" || String(l.detail || "").includes("HR已回复");
-      const quoteLabel = hrReplied ? "📩 对方最新回复：" : "📤 我方发出：";
+    .map((c) => {
+      const canSendImg = Boolean(c.job_id && hasResumeImg && !c.hasImg);
+      const quoteLabel = c.lastSender === "ME"
+        ? "📤 我方最近发出："
+        : c.hrInitiated
+          ? "📩 HR主动发来："
+          : "📩 对方最新回复：";
       return `
         <article class="delivery-card">
           <div class="delivery-card-head">
             <div>
-              <strong>${esc(l.company_name)}</strong>${l.job_title ? ` · <span>${esc(l.job_title)}</span>` : ""}
-              ${l.salary_range ? ` <span class="meta-pill">${esc(l.salary_range)}</span>` : ""}
-              <span class="muted" style="margin-left:6px;">${esc(l.profile_id)} · ${esc(fmtTime(l.created_at))}</span>
+              <strong>${esc(c.company_name)}</strong>${c.job_title ? ` · <span>${esc(c.job_title)}</span>` : ""}
+              ${c.salary_range ? ` <span class="meta-pill">${esc(c.salary_range)}</span>` : ""}
+              <span class="muted" style="margin-left:6px;">${esc(c.profile_id)} · ${esc(fmtTime(c.created_at))}${c.msgCount > 1 ? ` · 共${esc(c.msgCount)}条动态` : ""}</span>
             </div>
             <div class="delivery-card-badges">
-              ${deliveryLogBadgesHtml(l)}
+              ${deliveryConvBadgesHtml(c)}
             </div>
           </div>
-          ${l.greeting_text ? `<div class="delivery-quote"><strong style="color:${hrReplied ? "var(--green-fg)" : "var(--accent-teal)"};">${quoteLabel}</strong>${esc(l.greeting_text)}</div>` : ""}
+          ${c.lastText ? `<div class="delivery-quote"><strong style="color:${c.lastSender === "HR" ? "var(--green-fg)" : "var(--accent-teal)"};">${quoteLabel}</strong>${esc(c.lastText)}</div>` : ""}
           <div class="delivery-card-actions">
-            <span class="muted" style="font-size:12px;">${esc(l.detail || "")}</span>
+            <span class="muted" style="font-size:12px;">${esc(c.detail || "")}</span>
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
-              ${l.job_id ? `<button type="button" class="btn btn-primary btn-xs" data-deliv-followup="${l.job_id}" data-deliv-profile="${esc(l.profile_id)}">💬 连续沟通/回复模板</button>` : ""}
-              ${l.job_id ? `<button type="button" class="btn btn-secondary btn-xs" data-deliv-jump="${l.job_id}">查看岗位详情</button>` : ""}
-              ${canSendImg ? `<button type="button" class="btn btn-secondary btn-xs" data-deliv-send-img="${l.job_id}" data-deliv-profile="${esc(l.profile_id)}">🖼️ 补发图片简历</button>` : ""}
-              ${l.job_id ? `<button type="button" class="btn btn-ghost btn-xs" data-deliv-open="${l.job_id}" data-deliv-profile="${esc(l.profile_id)}">在 Ego 打开</button>` : ""}
+              ${c.job_id ? `<button type="button" class="btn btn-primary btn-xs" data-deliv-followup="${c.job_id}" data-deliv-profile="${esc(c.profile_id)}">💬 连续沟通/回复模板</button>` : ""}
+              ${c.job_id ? `<button type="button" class="btn btn-secondary btn-xs" data-deliv-jump="${c.job_id}">查看岗位详情</button>` : ""}
+              ${canSendImg ? `<button type="button" class="btn btn-secondary btn-xs" data-deliv-send-img="${c.job_id}" data-deliv-profile="${esc(c.profile_id)}">🖼️ 发送图片简历</button>` : ""}
+              ${c.job_id ? `<button type="button" class="btn btn-ghost btn-xs" data-deliv-open="${c.job_id}" data-deliv-profile="${esc(c.profile_id)}">在 Ego 打开</button>` : ""}
             </div>
           </div>
         </article>
@@ -1989,20 +2032,20 @@ function renderDeliveries() {
 }
 
 function renderDeliveryLogs() {
-  const logs = state.data?.logs || [];
-  if (logs.length === 0) {
-    els.deliveryLogsList.innerHTML = `<p class="muted">暂无打招呼记录。</p>`;
+  const convs = buildConversationLedger();
+  if (convs.length === 0) {
+    els.deliveryLogsList.innerHTML = `<p class="muted">暂无沟通记录。</p>`;
     return;
   }
-  els.deliveryLogsList.innerHTML = logs
+  els.deliveryLogsList.innerHTML = convs
     .slice(0, 30)
-    .map((l) => `
+    .map((c) => `
       <div class="log-item">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-          <span><strong>${esc(l.company_name)}</strong>${l.job_title ? ` · ${esc(l.job_title)}` : ""} · ${esc(l.profile_id)}</span>
-          <span>${deliveryLogBadgesHtml(l)}</span>
+          <span><strong>${esc(c.company_name)}</strong>${c.job_title ? ` · ${esc(c.job_title)}` : ""} · ${esc(c.profile_id)}</span>
+          <span>${deliveryConvBadgesHtml(c)}</span>
         </div>
-        <div class="muted">${esc(fmtTime(l.created_at))} — ${esc(l.detail)}</div>
+        <div class="muted">${esc(fmtTime(c.created_at))} — ${esc(c.lastText ? c.lastText.slice(0, 80) : c.detail)}</div>
       </div>
     `)
     .join("");
