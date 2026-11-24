@@ -126,12 +126,71 @@ fn spawn_node_server(app: &tauri::AppHandle) -> Result<(u16, Option<Child>), Str
     Err("等待本地服务就绪超时".to_string())
 }
 
+const SINGLE_INSTANCE_PORT: u16 = 37901;
+
+fn try_focus_existing_instance() -> bool {
+    let addr: SocketAddr = format!("127.0.0.1:{SINGLE_INSTANCE_PORT}").parse().unwrap();
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(180)) else {
+        return false;
+    };
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+    if stream.write_all(b"FOCUS\n").is_err() {
+        return false;
+    }
+    let mut ack = [0u8; 16];
+    matches!(stream.read(&mut ack), Ok(n) if n > 0 && &ack[..2] == b"OK")
+}
+
+fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
+    let make_builder = || {
+        tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+            .title("Boss AI Router · 智能选岗与一键沟通助手")
+            .inner_size(1340.0, 860.0)
+            .min_inner_size(960.0, 640.0)
+            .resizable(true)
+            .center()
+    };
+
+    if make_builder().build().is_ok() {
+        return Ok(());
+    }
+
+    // Fallback when default EBWebView profile is locked (HRESULT 0x800700AA)
+    let fallback_dir = std::env::temp_dir().join(format!("boss-ai-router-wv-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&fallback_dir);
+    make_builder().data_directory(fallback_dir).build()?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if try_focus_existing_instance() {
+        return;
+    }
+
     let shared_child = Arc::new(Mutex::new(None));
     let app = tauri::Builder::default()
         .manage(ServerProcess(shared_child.clone()))
         .setup(move |app| {
+            create_main_window(app)?;
+
+            let focus_handle = app.handle().clone();
+            if let Ok(listener) = TcpListener::bind(("127.0.0.1", SINGLE_INSTANCE_PORT)) {
+                std::thread::spawn(move || {
+                    for mut stream in listener.incoming().flatten() {
+                        let mut buf = [0u8; 32];
+                        let _ = stream.read(&mut buf);
+                        if let Some(win) = focus_handle.get_webview_window("main") {
+                            let _ = win.unminimize();
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                        let _ = stream.write_all(b"OK\n");
+                    }
+                });
+            }
+
             let handle = app.handle().clone();
             let child_slot = shared_child.clone();
             std::thread::spawn(move || {
