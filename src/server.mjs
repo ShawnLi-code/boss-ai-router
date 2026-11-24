@@ -29,6 +29,7 @@ import {
   listJobs,
   listKnownExternalIds,
   listPatrolRuns,
+  normalizeCompanyRoot,
   purgeFilteredJobs,
   recordPatrolRun,
   removeBlacklistCompany,
@@ -1273,19 +1274,29 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
         const tTrack = tracks.find((t) => t.profile_id === pid) || tracks[0];
         for (const ch of resSync.chats || []) {
           const cRoot = normalizeCompanyRoot(ch.company_name);
-          const matchedJobs = allJobs.filter((j) => {
-            if (ch.company_name && (j.company_name === ch.company_name || (cRoot && j.normalized_company && (j.normalized_company === cRoot || j.normalized_company.includes(cRoot) || cRoot.includes(j.normalized_company))))) {
-              if (!ch.job_title) return true;
-              return j.job_title === ch.job_title || j.job_title.includes(ch.job_title) || ch.job_title.includes(j.job_title);
-            }
-            return ch.raw_text && j.company_name && ch.raw_text.includes(j.company_name);
-          });
+          let matchedJobs = ch.external_id
+            ? allJobs.filter((j) => j.external_id && j.external_id === ch.external_id)
+            : [];
+          if (matchedJobs.length === 0) {
+            matchedJobs = allJobs.filter((j) => {
+              const sameCompany = ch.company_name && (j.company_name === ch.company_name || (cRoot && j.normalized_company && (j.normalized_company === cRoot || j.normalized_company.includes(cRoot) || cRoot.includes(j.normalized_company))));
+              if (sameCompany) {
+                if (j.source_profile_id && j.source_profile_id !== pid && allJobs.some((x) => x.company_name === j.company_name && x.source_profile_id === pid)) {
+                  return false;
+                }
+                if (!ch.job_title) return true;
+                return j.job_title === ch.job_title || j.job_title.includes(ch.job_title) || ch.job_title.includes(j.job_title);
+              }
+              return ch.raw_text && j.company_name && ch.raw_text.includes(j.company_name);
+            });
+          }
           for (const mj of matchedJobs) {
             const alreadyLogged = existingLogs.some((l) => l.job_id === mj.id && l.status === "DELIVERED");
-            if (mj.status === "NEW" || mj.status === "PREPARED") {
+            const nextStatus = ch.hr_replied ? "REPLIED" : "DELIVERED";
+            if (mj.status === "NEW" || mj.status === "PREPARED" || (ch.hr_replied && mj.status === "DELIVERED")) {
               updateJobRouting(mj.id, {
                 assigned_profile_id: pid,
-                status: "DELIVERED",
+                status: nextStatus,
               });
             }
             if (!alreadyLogged) {
@@ -1301,7 +1312,7 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
                 image_sent: false,
                 image_status: mj.tailored_resume?.image_delivery || "NONE",
                 status: "DELIVERED",
-                detail: `从 Boss 历史聊天同步：${ch.recruiter_name || "HR"}${ch.last_msg ? ` · 最近消息「${ch.last_msg.slice(0, 40)}」` : ""}`,
+                detail: `从 Boss 历史聊天同步：${ch.recruiter_name || "HR"}${ch.hr_replied ? "（HR已回复）" : ""}${ch.last_msg ? ` · 最近消息「${ch.last_msg.slice(0, 40)}」` : ""}`,
               });
               existingLogs.unshift(logRow);
               syncedCount++;

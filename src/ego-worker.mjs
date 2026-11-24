@@ -1182,22 +1182,32 @@ try {
     const out = [];
     for (const el of nodes) {
       if (out.length >= limit) break;
-      const vueData = el.__vue__?.data || el.parentElement?.__vue__?.data || {};
-      const lines = (el.innerText || "").split(/\\n+/).map((x) => x.trim()).filter(Boolean);
-      const companyName = String(vueData.brandName || vueData.companyName || "").trim();
+      const li = el.closest("li") || el.parentElement;
+      const vue = li?.__vue__ || el.__vue__ || {};
+      const vueData = vue._props?.source || vue.data || vue.source || vue.friend || {};
+      const nameSpan = (el.querySelector(".name-text")?.innerText || "").trim();
+      const boxSpans = [...el.querySelectorAll(".name-box > span")]
+        .map((s) => (s.innerText || "").trim())
+        .filter(Boolean);
+      const domCompany = boxSpans.find((t) => t && t !== nameSpan && !/^(?:HR|招聘者|经理|主管|总监|CEO|CTO|人事)$/i.test(t)) || "";
+      const companyName = String(vueData.brandName || vueData.companyName || domCompany || "").trim();
       const jobTitle = String(vueData.positionName || vueData.jobName || "").trim();
-      const recruiterName = String(vueData.name || vueData.geekName || lines[0] || "").trim();
-      const lastMsg = String(vueData.lastMsg || lines[lines.length - 1] || "").trim();
-      const guessedCompany = companyName || (lines.find((l) => l.includes("·"))?.split("·").pop()?.trim() || "");
-      const key = (guessedCompany + "|" + jobTitle + "|" + recruiterName).toLowerCase();
-      if (!guessedCompany && !lines.length) continue;
+      const recruiterName = String(vueData.name || vueData.geekName || nameSpan || "HR").trim();
+      const lastMsg = String(vueData.lastText || vueData.lastMsg || el.querySelector(".last-msg-text")?.innerText || "").trim();
+      const externalId = String(vueData.encryptJobId || "").trim();
+      const hrReplied = vueData.lastIsSelf === false || vueData.lastIsSelf === 0;
+      const lines = (el.innerText || "").split(/\\n+/).map((x) => x.trim()).filter(Boolean);
+      const key = (externalId || (companyName + "|" + jobTitle + "|" + recruiterName)).toLowerCase();
+      if (!companyName && !lines.length) continue;
       if (seen.has(key)) continue;
       seen.add(key);
       out.push({
-        company_name: guessedCompany,
+        external_id: externalId,
+        company_name: companyName,
         job_title: jobTitle,
         recruiter_name: recruiterName,
         last_msg: lastMsg,
+        hr_replied: hrReplied,
         raw_text: lines.join(" | ").slice(0, 140),
       });
     }
