@@ -1958,8 +1958,6 @@ function buildConversationLedger() {
     if (!bossStage) {
       if (job?.status === "INTERVIEW") bossStage = "INTERVIEW";
       else if (job?.status === "REJECTED") bossStage = "NOT_INTERESTED";
-      else if (/面试|约.*时间|线下面|视频面/.test(lastText)) bossStage = "INTERVIEW";
-      else if (/微信|交换|联系方式|加[vV]|已发送简历/.test(lastText)) bossStage = "EXCHANGED";
       else if (/暂不合适|已招满|暂不考虑|感谢投递/.test(lastText)) bossStage = "NOT_INTERESTED";
       else if (hrInitiated) bossStage = "NEW_GREET";
       else bossStage = "CHATTING";

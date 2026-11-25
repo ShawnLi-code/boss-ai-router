@@ -70,6 +70,7 @@ import {
   renderResumeImageViaEgo,
   scrapeBossJobs,
   sendBossReplyMessage,
+  setPatrolPreemptHook,
   syncBossContactedChats,
   syncResumeFromBoss,
 } from "./ego-worker.mjs";
@@ -207,6 +208,12 @@ async function autoComputeCommuteForJobs(jobs = [], onLog = () => {}) {
 let patrolRunning = false;
 let patrolAbortRequested = false;
 let dailyAutoSuppressedDate = "";
+
+setPatrolPreemptHook(() => {
+  patrolAbortRequested = true;
+  dailyAutoSuppressedDate = todayStr();
+  broadcast("patrol-progress", { done: true });
+});
 
 function resolveBossFilterParams(settings = {}) {
   if (settings.boss_native_filter === "false") {
@@ -1402,10 +1409,13 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
             const unreadCnt = Number(ch.unread_count || 0);
             const statusChanged = mj.status === "NEW" || mj.status === "PREPARED" || (ch.hr_replied && mj.status === "DELIVERED");
             const unreadChanged = Number(mj.boss_unread_count || 0) !== unreadCnt;
-            let inferredStage = mj.boss_stage || "";
+            let inferredStage = ch.boss_stage || mj.boss_stage || "";
+            if (inferredStage === "INTERVIEW" && mj.status !== "INTERVIEW" && (!ch.boss_stage || ch.boss_stage !== "INTERVIEW")) {
+              // 纠正历史误判（如 HR 开场白含“线上面试，有意可发简历”导致的假有面试）
+              inferredStage = ch.boss_stage || (ch.hr_replied && !prevMsgs.some((m) => m.sender === "ME") ? "NEW_GREET" : "CHATTING");
+            }
             if (!inferredStage) {
-              if (/面试|约.*时间|线下面|视频面/.test(lastText)) inferredStage = "INTERVIEW";
-              else if (/微信|交换|联系方式|加[vV]|已发送简历/.test(lastText)) inferredStage = "EXCHANGED";
+              if (mj.status === "INTERVIEW") inferredStage = "INTERVIEW";
               else if (/暂不合适|已招满|暂不考虑|感谢投递/.test(lastText)) inferredStage = "NOT_INTERESTED";
               else if (ch.hr_replied && !prevMsgs.some((m) => m.sender === "ME")) inferredStage = "NEW_GREET";
               else inferredStage = "CHATTING";

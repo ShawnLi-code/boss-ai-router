@@ -9,7 +9,7 @@ import path from "node:path";
 import vm from "node:vm";
 import { DEFAULT_FOLLOWUP_PROMPT, RESUME_ASSETS_DIR, addDeliveryLog, db, getCompanyDeliveryHistory, getJob, getResumeImageMeta, getScrapeTelemetry, getSettings, listDeliveryLogs, listKnownExternalIds, listPatrolRuns, normalizeCompanyRoot, pickBestMatchedJobForChat, recordPatrolRun, saveResumeImageMeta, updateJobRouting, upsertJob } from "../src/db.mjs";
 import { buildChatCompletionsUrl } from "../src/llm.mjs";
-import { abortActiveEgoTask, buildBossDeliveryScript, buildBossSearchUrl, detectBossUnavailableState, extractBossEncryptJobId, getActiveLock, isBossVerificationUrl } from "../src/ego-worker.mjs";
+import { abortActiveEgoTask, buildBossDeliveryScript, buildBossSearchUrl, detectBossUnavailableState, extractBossEncryptJobId, getActiveLock, isBossVerificationUrl, withEgoSlot } from "../src/ego-worker.mjs";
 import { compareSemver } from "../src/updater.mjs";
 import { analyzeConversationAndSuggestReplies, generateContextualReplies } from "../src/reply-advisor.mjs";
 
@@ -728,6 +728,38 @@ test("Command Code GOAT DeepSeek 默认配置与真实口语化提示词就绪",
   const aborted = abortActiveEgoTask();
   assert.equal(aborted.ok, true);
   assert.equal(getActiveLock(), null);
+});
+
+test("Ego 进程调度：不同账号可并发不阻塞，同账号短任务自动排队且交互操作可抢占巡检", async () => {
+  const order = [];
+  const p1 = withEgoSlot({ scope: "Profile 1", label: "p1-task" }, async () => {
+    order.push("p1-start");
+    await new Promise((r) => setTimeout(r, 40));
+    order.push("p1-end");
+    return "p1";
+  });
+  const p2 = withEgoSlot({ scope: "Profile 2", label: "p2-task" }, async () => {
+    order.push("p2-start");
+    await new Promise((r) => setTimeout(r, 10));
+    order.push("p2-end");
+    return "p2";
+  });
+  await Promise.all([p1, p2]);
+  assert.ok(order.indexOf("p2-end") < order.indexOf("p1-end"));
+
+  // 同账号短任务自动排队
+  const seq = [];
+  const q1 = withEgoSlot({ scope: "Profile 1", label: "short-1" }, async () => {
+    seq.push("1-start");
+    await new Promise((r) => setTimeout(r, 30));
+    seq.push("1-end");
+  });
+  const q2 = withEgoSlot({ scope: "Profile 1", label: "short-2" }, async () => {
+    seq.push("2-start");
+    seq.push("2-end");
+  });
+  await Promise.all([q1, q2]);
+  assert.deepEqual(seq, ["1-start", "1-end", "2-start", "2-end"]);
 });
 
 test("批量投递话术风格选择：支持按 auto/direct/tech/bridge 精准取出对应话术", () => {

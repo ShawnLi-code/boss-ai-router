@@ -8,12 +8,22 @@ import { calculateBikePlusMetroMetrics } from "./commute.mjs";
 const RUNS_DIR = path.join(DATA_DIR, "ego-runs");
 fs.mkdirSync(RUNS_DIR, { recursive: true });
 
-let activeLock = null;
-let activeChildProc = null;
-let activeTaskAborted = false;
+const slotsByScope = new Map();
+const waitersByScope = new Map();
+let patrolPreemptHook = null;
+
+export function setPatrolPreemptHook(fn) {
+  patrolPreemptHook = typeof fn === "function" ? fn : null;
+}
 
 export function getActiveLock() {
-  return activeLock;
+  if (slotsByScope.size === 0) return null;
+  const active = [...slotsByScope.values()];
+  return {
+    label: active.map((s) => s.label).join(" | "),
+    startedAt: active[0].startedAt,
+    scopes: active.map(({ scope, label, kind, startedAt }) => ({ scope, label, kind, startedAt })),
+  };
 }
 
 function killChildTree(child) {
@@ -26,39 +36,114 @@ function killChildTree(child) {
   try { child.kill("SIGTERM"); } catch {}
 }
 
-export function abortActiveEgoTask() {
-  const prev = activeLock?.label || "";
-  const hadChild = Boolean(activeChildProc);
-  activeTaskAborted = true;
-  if (activeChildProc) {
-    killChildTree(activeChildProc);
-    activeChildProc = null;
-  }
-  activeLock = null;
-  return { ok: true, hadLock: Boolean(prev || hadChild), abortedLabel: prev };
+function wakeNextWaiter(scope) {
+  const q = waitersByScope.get(scope);
+  if (!q || q.length === 0) return;
+  const next = q.shift();
+  if (q.length === 0) waitersByScope.delete(scope);
+  next.resolve();
 }
 
-function acquireLock(label) {
-  if (activeLock) {
-    const ageMs = Date.now() - Date.parse(activeLock.startedAt || 0);
-    if (!activeChildProc && Number.isFinite(ageMs) && ageMs > 15_000) {
-      activeLock = null;
-    } else {
-      throw new Error(`当前已有浏览器任务正在运行（${activeLock.label}），为防风控同一时间仅允许单任务串行执行`);
+function waitForScopeFree(scope, timeoutMs = 60_000) {
+  return new Promise((resolve, reject) => {
+    const q = waitersByScope.get(scope) || [];
+    const entry = {
+      resolve: () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      reject: (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    };
+    const timer = setTimeout(() => {
+      const list = waitersByScope.get(scope);
+      if (list) {
+        const idx = list.indexOf(entry);
+        if (idx >= 0) list.splice(idx, 1);
+        if (list.length === 0) waitersByScope.delete(scope);
+      }
+      const cur = slotsByScope.get(scope);
+      reject(new Error(`等待超时：当前账号任务（${cur?.label || scope}）仍在执行中`));
+    }, timeoutMs);
+    q.push(entry);
+    waitersByScope.set(scope, q);
+  });
+}
+
+export function abortActiveEgoTask(targetScope = null) {
+  const abortedLabels = [];
+  for (const [scope, slot] of [...slotsByScope.entries()]) {
+    if (targetScope && scope !== targetScope) continue;
+    abortedLabels.push(slot.label);
+    slot.aborted = true;
+    if (slot.childProc) {
+      killChildTree(slot.childProc);
+      slot.childProc = null;
+    }
+    slotsByScope.delete(scope);
+    const q = waitersByScope.get(scope);
+    if (q) {
+      while (q.length) q.shift().reject(new Error("任务已被用户手动中止"));
+      waitersByScope.delete(scope);
     }
   }
-  activeTaskAborted = false;
-  activeLock = { label, startedAt: new Date().toISOString() };
+  return {
+    ok: true,
+    hadLock: abortedLabels.length > 0,
+    abortedLabel: abortedLabels.join(" | "),
+  };
 }
 
-function releaseLock() {
-  activeLock = null;
+export async function withEgoSlot(
+  { scope = "Profile 1", label = "Ego 任务", kind = "INTERACTIVE", waitMs = 60_000, onLog = () => {} },
+  fn
+) {
+  while (slotsByScope.has(scope)) {
+    const cur = slotsByScope.get(scope);
+    const ageMs = Date.now() - Date.parse(cur?.startedAt || 0);
+    if (cur && !cur.childProc && Number.isFinite(ageMs) && ageMs > 15_000) {
+      slotsByScope.delete(scope);
+      break;
+    }
+    if (kind === "PATROL") {
+      throw new Error(`当前已有浏览器任务正在运行（${cur.label}），为防风控同一账号仅允许单任务串行执行`);
+    }
+    if (cur.kind === "PATROL") {
+      onLog(`⏸️ 优先响应你的操作「${label}」，正在暂停后台巡检（${cur.label}）...`, "warn");
+      try { patrolPreemptHook?.(scope); } catch {}
+      cur.aborted = true;
+      if (cur.childProc) {
+        killChildTree(cur.childProc);
+        cur.childProc = null;
+      }
+      await waitForScopeFree(scope, 10_000).catch(() => {
+        slotsByScope.delete(scope);
+      });
+      break;
+    }
+    onLog(`⏳ ${scope} 正在执行「${cur.label}」，已自动排队等待完成后继续...`);
+    await waitForScopeFree(scope, waitMs);
+  }
+
+  const slot = { scope, label, kind, startedAt: new Date().toISOString(), childProc: null, aborted: false };
+  slotsByScope.set(scope, slot);
+  try {
+    return await fn(slot);
+  } finally {
+    if (slotsByScope.get(scope) === slot) {
+      slotsByScope.delete(scope);
+      wakeNextWaiter(scope);
+    }
+  }
 }
 
-function runEgoScript(scriptName, code, timeoutMs = 180_000, { onLine = null } = {}) {
+function runEgoScript(scriptName, code, timeoutMs = 180_000, { onLine = null, scope = null } = {}) {
   const filePath = path.join(RUNS_DIR, `${Date.now()}-${scriptName}.mjs`);
   fs.writeFileSync(filePath, code, "utf8");
   const entry = `await import('${pathToFileURL(filePath).href}')`;
+  const slot = scope ? slotsByScope.get(scope) : null;
 
   if (!onLine) {
     return new Promise((resolve, reject) => {
@@ -67,9 +152,9 @@ function runEgoScript(scriptName, code, timeoutMs = 180_000, { onLine = null } =
         ["nodejs", "-e", entry],
         { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 },
         (err, stdout, stderr) => {
-          if (activeChildProc === child) activeChildProc = null;
+          if (slot && slot.childProc === child) slot.childProc = null;
           const combined = [stdout, stderr].filter(Boolean).join("\n");
-          if (activeTaskAborted) {
+          if (slot?.aborted) {
             return reject(new Error("任务已被用户手动中止"));
           }
           if (err) {
@@ -78,13 +163,13 @@ function runEgoScript(scriptName, code, timeoutMs = 180_000, { onLine = null } =
           resolve({ stdout: stdout || "", stderr: stderr || "", combined });
         }
       );
-      activeChildProc = child;
+      if (slot) slot.childProc = child;
     });
   }
 
   return new Promise((resolve, reject) => {
     const child = spawn("ego-browser", ["nodejs", "-e", entry], { windowsHide: true });
-    activeChildProc = child;
+    if (slot) slot.childProc = child;
     let stdout = "";
     let stderr = "";
     let bufOut = "";
@@ -116,17 +201,18 @@ function runEgoScript(scriptName, code, timeoutMs = 180_000, { onLine = null } =
     child.stderr?.on("data", (c) => flushLines(c, true));
     child.on("error", (err) => {
       clearTimeout(timer);
-      if (activeChildProc === child) activeChildProc = null;
+      if (slot && slot.childProc === child) slot.childProc = null;
       reject(err);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (activeChildProc === child) activeChildProc = null;
+      if (slot && slot.childProc === child) slot.childProc = null;
       if (bufOut) onLine(bufOut, "stdout");
       if (bufErr) onLine(bufErr, "stderr");
       const combined = [stdout, stderr].filter(Boolean).join("\n");
-      if (code === 0 || timedOut || activeTaskAborted) {
-        resolve({ stdout, stderr, combined, timedOut, aborted: activeTaskAborted, exitCode: code });
+      const wasAborted = Boolean(slot?.aborted);
+      if (code === 0 || timedOut || wasAborted) {
+        resolve({ stdout, stderr, combined, timedOut, aborted: wasAborted, exitCode: code });
       } else {
         reject(new Error(`ego-browser exited with code ${code}\n${combined}`.trim()));
       }
@@ -175,8 +261,7 @@ export async function searchCompaniesViaEgo(companyNames = [], profileId = "Prof
   const uniqueNames = [...new Set(companyNames.map((s) => String(s || "").trim()).filter(Boolean))];
   if (uniqueNames.length === 0) return {};
 
-  acquireLock(`企业三段式深度尽调（${uniqueNames.length} 家公司）`);
-  try {
+  return withEgoSlot({ scope: profileId, label: `企业三段式深度尽调（${uniqueNames.length} 家公司）`, kind: "PATROL", onLog }, async () => {
     onLog(`正在通过 Ego 进行工商全称核验 + 背调查个税 + 知乎/脉脉口碑排查（${uniqueNames.length} 家）...`);
     const code = `
 const randDelay = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
@@ -265,17 +350,14 @@ for (let i = 0; i < companies.length; i++) {
 }
 console.log("RESULT_JSON:" + JSON.stringify({ status: "OK", results }));
 `;
-    const { combined } = await runEgoScript("baidu-intel", code, Math.max(90_000, uniqueNames.length * 25_000));
+    const { combined } = await runEgoScript("baidu-intel", code, Math.max(90_000, uniqueNames.length * 25_000), { scope: profileId });
     const parsed = parseMarkedJson(combined);
     return parsed.results || {};
-  } finally {
-    releaseLock();
-  }
+  });
 }
 
 export async function syncResumeFromBoss(trackKey, profileId, onLog = () => {}) {
-  acquireLock(`读取 ${trackKey} 轨简历 (${profileId})`);
-  try {
+  return withEgoSlot({ scope: profileId, label: `读取 ${trackKey} 轨简历 (${profileId})`, kind: "INTERACTIVE", onLog }, async () => {
     onLog(`正在使用 Ego 配置 ${profileId} 打开 Boss直聘在线简历页面（低速模拟真人）...`);
     const code = `
 const task = await taskSpace("boss-sync-resume-${trackKey}-" + Date.now(), { profileId: ${JSON.stringify(profileId)} });
@@ -368,7 +450,7 @@ if (parsed.needVerify) {
   }));
 }
 `;
-    const { combined } = await runEgoScript(`sync-resume-${trackKey}`, code, 60_000);
+    const { combined } = await runEgoScript(`sync-resume-${trackKey}`, code, 60_000, { scope: profileId });
     const res = parseMarkedJson(combined);
     if (res.status === "VERIFICATION_REQUIRED") {
       onLog(`⚠️ 账号 ${profileId} 需要人工验证/登录（TaskSpace #${res.taskSpaceId}），已移交控制权！`);
@@ -377,9 +459,7 @@ if (parsed.needVerify) {
     const structured = normalizeParsedResume(trackKey, res.parsed);
     onLog(`✅ 已成功同步 ${trackKey} 轨简历（${structured.candidate_name || profileId} · ${structured.years_label || "经验未知"}）`);
     return { status: "OK", resume: structured };
-  } finally {
-    releaseLock();
-  }
+  });
 }
 
 function normalizeParsedResume(trackKey, p) {
@@ -546,8 +626,7 @@ export async function scrapeBossJobs({
   const safeMaxDelay = Math.max(safeMinDelay + 1000, Number(maxDelayMs) || 8500);
   const safeClickBudget = Math.max(safeMax + 5, Math.min(55, Number(maxClicksPerStep) || 32));
 
-  acquireLock(`抓取 Boss 岗位「${query}」(${profileId})`);
-  try {
+  return withEgoSlot({ scope: profileId, label: `抓取 Boss 岗位「${query}」(${profileId})`, kind: "PATROL", onLog }, async () => {
     const filterTags = [
       bossJobType === "1901" ? "全职" : "",
       bossExperience ? `经验[${bossExperience}]` : "",
@@ -855,6 +934,7 @@ console.log("RESULT_JSON:" + JSON.stringify({
       code,
       Math.max(480_000, safeClickBudget * 28_000),
       {
+        scope: profileId,
         onLine: (line, src) => {
           if (line.startsWith("ITEM_JSON:")) {
             try { streamedJobs.push(JSON.parse(line.slice("ITEM_JSON:".length))); } catch {}
@@ -867,7 +947,7 @@ console.log("RESULT_JSON:" + JSON.stringify({
       }
     );
     if (aborted) {
-      onLog(`⏹️ 已手动停止抓取（已保留当前读到的 ${streamedJobs.length} 条岗位）。`, "warn");
+      onLog(`⏹️ 已暂停/停止当前抓取（已保留读到的 ${streamedJobs.length} 条岗位）。`, "warn");
       return {
         status: "ABORTED",
         taskSpaceId: null,
@@ -897,9 +977,7 @@ console.log("RESULT_JSON:" + JSON.stringify({
       onLog(`✅ 增量采集完成：翻扫 ${st.scannedCards || 0} 张（跳过已存 ${st.skippedExisting || 0}、预筛省点击 ${st.skippedPreFilter || 0}），实点详情 ${st.detailClicks || 0} 次，新采 ${res.jobs.length} 条。`);
     }
     return res;
-  } finally {
-    releaseLock();
-  }
+  });
 }
 
 export async function openBossJobPage({
@@ -913,8 +991,7 @@ export async function openBossJobPage({
     jobUrl && /^https?:\/\//i.test(jobUrl)
       ? jobUrl
       : `https://www.zhipin.com/web/geek/jobs?query=${encodeURIComponent(`${companyName} ${jobTitle}`.trim())}`;
-  acquireLock(`打开岗位详情页「${companyName} · ${jobTitle}」(${profileId})`);
-  try {
+  return withEgoSlot({ scope: profileId, label: `打开岗位详情页「${companyName} · ${jobTitle}」(${profileId})`, kind: "INTERACTIVE", onLog }, async () => {
     onLog(`正在使用 ${profileId} 在 Ego 浏览器打开「${companyName} · ${jobTitle}」...`);
     const code = `
 const task = await taskSpace("boss-open-" + Date.now(), { profileId: ${JSON.stringify(profileId)} });
@@ -930,13 +1007,11 @@ console.log("RESULT_JSON:" + JSON.stringify({
   message: "已在 Ego 浏览器打开岗位页面并交给你操作，你可以直接查看或发起沟通、发送简历",
 }));
 `;
-    const { combined } = await runEgoScript("open-job-page", code, 45_000);
+    const { combined } = await runEgoScript("open-job-page", code, 45_000, { scope: profileId });
     const res = parseMarkedJson(combined);
     onLog(`🔗 ${res.message} (TaskSpace #${res.taskSpaceId})`);
     return res;
-  } finally {
-    releaseLock();
-  }
+  });
 }
 
 export function detectBossUnavailableState({ title = "", bodyText = "", pathname = "", hasChatButton = true } = {}) {
@@ -1253,22 +1328,18 @@ console.log("RESULT_JSON:" + JSON.stringify({
 
 export async function prepareBossDelivery(opts) {
   const { profileId, companyName, jobTitle, onLog = () => {} } = opts;
-  acquireLock(`打招呼「${companyName} · ${jobTitle}」(${profileId})`);
-  try {
+  return withEgoSlot({ scope: profileId, label: `打招呼「${companyName} · ${jobTitle}」(${profileId})`, kind: "INTERACTIVE", onLog }, async () => {
     onLog(`正在使用 ${profileId} 打开岗位/聊天框（${companyName} · ${jobTitle}）...`);
     const code = buildBossDeliveryScript(opts);
-    const { combined } = await runEgoScript("prepare-delivery", code, 95_000);
+    const { combined } = await runEgoScript("prepare-delivery", code, 95_000, { scope: profileId });
     const res = parseMarkedJson(combined);
     onLog(`📨 ${res.message}`);
     return res;
-  } finally {
-    releaseLock();
-  }
+  });
 }
 
 export async function fetchBossProfilePhone({ profileId, onLog = () => {} }) {
-  acquireLock(`识别 Boss 绑定手机号 (${profileId})`);
-  try {
+  return withEgoSlot({ scope: profileId, label: `识别 Boss 绑定手机号 (${profileId})`, kind: "INTERACTIVE", onLog }, async () => {
     const code = `
 const task = await taskSpace("boss-phone-" + Date.now(), { profileId: ${JSON.stringify(profileId)} });
 try {
@@ -1286,18 +1357,15 @@ try {
   await task.finish({ keep: [] }).catch(() => {});
 }
 `;
-    const { combined } = await runEgoScript("fetch-phone", code, 45_000);
+    const { combined } = await runEgoScript("fetch-phone", code, 45_000, { scope: profileId });
     const parsed = parseMarkedJson(combined);
     if (parsed.phone) onLog(`📱 已识别 ${profileId} 绑定手机号：${parsed.phone}`);
     return parsed;
-  } finally {
-    releaseLock();
-  }
+  });
 }
 
 export async function syncBossContactedChats({ profileId, maxItems = 60, onLog = () => {} }) {
-  acquireLock(`同步 Boss 历史沟通记录 (${profileId})`);
-  try {
+  return withEgoSlot({ scope: profileId, label: `同步 Boss 历史沟通记录 (${profileId})`, kind: "INTERACTIVE", onLog }, async () => {
     onLog(`正在打开 ${profileId} 的 Boss 聊天列表核对历史已沟通公司...`);
     const code = `
 const randDelay = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
@@ -1373,11 +1441,66 @@ try {
         last_msg: lastMsg,
         hr_replied: hrReplied,
         unread_count: Number(vueData.unreadCount || 0),
+        relation_type: Number(vueData.relationType || 0),
         raw_text: lines.join(" | ").slice(0, 140),
       });
     }
     return out;
   }, ${Number(maxItems) || 60});
+
+  // 真实读取 Boss「有面试 / 有交换 / 不感兴趣」标签页，避免凭“线上面试”字样误判
+  const stageKeys = { INTERVIEW: [], EXCHANGED: [], NOT_INTERESTED: [] };
+  const tabDefs = [
+    { label: "有面试", stage: "INTERVIEW" },
+    { label: "有交换", stage: "EXCHANGED" },
+    { label: "不感兴趣", stage: "NOT_INTERESTED" },
+  ];
+  for (const td of tabDefs) {
+    const clicked = await page.evaluate((tabName) => {
+      const moreBtn = [...document.querySelectorAll(".chat-filter span, .label-list span, .user-list-top span, [class*='filter'] span")].find((s) => (s.innerText || "").trim().startsWith("更多"));
+      const findTab = () => [...document.querySelectorAll(".chat-filter span, .label-list span, .user-list-top span, [class*='filter'] span, .dropdown-list span, li")].find((s) => (s.innerText || "").replace(/\\d+/g, "").trim() === tabName);
+      let el = findTab();
+      if ((!el || el.offsetParent === null) && moreBtn) {
+        moreBtn.click();
+        el = findTab();
+      }
+      if (!el) return false;
+      el.click();
+      return true;
+    }, td.label).catch(() => false);
+    if (!clicked) continue;
+    await page.waitForTimeout(550);
+    const matchedKeys = await page.evaluate(() => {
+      const nodes = [...document.querySelectorAll(".user-list .friend-content, .chat-user .friend-content, li.friend-content")];
+      return nodes.map((el) => {
+        const li = el.closest("li") || el.parentElement;
+        const vue = li?.__vue__ || el.__vue__ || {};
+        const v = vue._props?.source || vue.data || vue.source || vue.friend || {};
+        const ext = String(v.encryptJobId || "").trim();
+        const brand = String(v.brandName || v.companyName || "").trim();
+        const pos = String(v.positionName || v.jobName || "").trim();
+        return ext || (brand + "|" + pos).toLowerCase();
+      }).filter(Boolean);
+    }).catch(() => []);
+    stageKeys[td.stage] = matchedKeys;
+  }
+  await page.evaluate(() => {
+    const allTab = [...document.querySelectorAll(".chat-filter span, .label-list span, .user-list-top span, [class*='filter'] span")].find((s) => (s.innerText || "").replace(/\\d+/g, "").trim() === "全部");
+    allTab?.click();
+  }).catch(() => {});
+  await page.waitForTimeout(350);
+
+  const interviewSet = new Set(stageKeys.INTERVIEW);
+  const exchangedSet = new Set(stageKeys.EXCHANGED);
+  const notIntSet = new Set(stageKeys.NOT_INTERESTED);
+  for (const ch of chats) {
+    const k = ch.external_id || (ch.company_name + "|" + ch.job_title).toLowerCase();
+    if (interviewSet.has(k)) ch.boss_stage = "INTERVIEW";
+    else if (exchangedSet.has(k)) ch.boss_stage = "EXCHANGED";
+    else if (notIntSet.has(k)) ch.boss_stage = "NOT_INTERESTED";
+    else if (ch.relation_type === 1 || (ch.hr_replied && !ch.raw_text)) ch.boss_stage = "NEW_GREET";
+    else ch.boss_stage = "CHATTING";
+  }
 
   for (const ch of chats.slice(0, 12)) {
     if (ch.job_title && ch.salary_range) continue;
@@ -1409,15 +1532,13 @@ try {
   }
 }
 `;
-    const { combined } = await runEgoScript("sync-chats", code, 75_000);
+    const { combined } = await runEgoScript("sync-chats", code, 75_000, { scope: profileId });
     const res = parseMarkedJson(combined);
     if (res.status === "OK") {
       onLog(`✅ ${profileId} 已读取 ${(res.chats || []).length} 条最近 Boss 聊天会话`);
     }
     return res;
-  } finally {
-    releaseLock();
-  }
+  });
 }
 
 export async function fetchBossConversationMessages({
@@ -1427,8 +1548,7 @@ export async function fetchBossConversationMessages({
   externalId = "",
   onLog = () => {},
 }) {
-  acquireLock(`拉取 Boss 对话内容 (${companyName || profileId})`);
-  try {
+  return withEgoSlot({ scope: profileId, label: `拉取 Boss 对话内容 (${companyName || profileId})`, kind: "INTERACTIVE", onLog }, async () => {
     onLog(`正在打开 ${profileId} 的 Boss 聊天记录以对齐「${companyName}」最新对话...`);
     const code = `
 const randDelay = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
@@ -1551,15 +1671,13 @@ try {
   }
 }
 `;
-    const { combined } = await runEgoScript("read-chat", code, 75_000);
+    const { combined } = await runEgoScript("read-chat", code, 75_000, { scope: profileId });
     const res = parseMarkedJson(combined);
     if (res.status === "OK") {
       onLog(`💬 已读取「${companyName}」最近 ${(res.messages || []).length} 条对话记录`);
     }
     return res;
-  } finally {
-    releaseLock();
-  }
+  });
 }
 
 export async function sendBossReplyMessage({
@@ -1574,8 +1692,7 @@ export async function sendBossReplyMessage({
 }) {
   const hasImage = Boolean(sendImageResume && imagePath && fs.existsSync(imagePath));
   const normalizedImagePath = hasImage ? imagePath.replace(/\\\\/g, "/") : "";
-  acquireLock(`发送连续回复「${companyName}」(${profileId})`);
-  try {
+  return withEgoSlot({ scope: profileId, label: `发送连续回复「${companyName}」(${profileId})`, kind: "INTERACTIVE", onLog }, async () => {
     onLog(`正在用 ${profileId} 发送跟进回复给「${companyName}」...`);
     const code = `
 const randDelay = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
@@ -1741,13 +1858,11 @@ try {
   }
 }
 `;
-    const { combined } = await runEgoScript("send-reply", code, 80_000);
+    const { combined } = await runEgoScript("send-reply", code, 80_000, { scope: profileId });
     const res = parseMarkedJson(combined);
     onLog(`📨 ${res.message || "跟进回复完成"}`);
     return res;
-  } finally {
-    releaseLock();
-  }
+  });
 }
 
 export async function renderResumeImageViaEgo({
@@ -1757,8 +1872,7 @@ export async function renderResumeImageViaEgo({
   profileId = "Profile 1",
   onLog = () => {},
 }) {
-  acquireLock("生成高清图片简历");
-  try {
+  return withEgoSlot({ scope: "RENDER", label: "生成高清图片简历", kind: "INTERACTIVE", onLog }, async () => {
     onLog("正在生成超清图片简历（PNG）...");
     const code = `
 const fs = await import("node:fs");
@@ -1828,18 +1942,15 @@ try {
   await task.finish({ keep: [] }).catch(() => {});
 }
 `;
-    const { combined } = await runEgoScript("render-resume-img", code, 60_000);
+    const { combined } = await runEgoScript("render-resume-img", code, 60_000, { scope: "RENDER" });
     const res = parseMarkedJson(combined);
     onLog(`✅ 已生成高清图片简历（${Math.round((res.bytes || 0) / 1024)} KB）`);
     return res;
-  } finally {
-    releaseLock();
-  }
+  });
 }
 
 export async function generateResumePdfViaEgo({ renderUrl, outputPath, profileId = "Profile 1", onLog = () => {} }) {
-  acquireLock("导出定制简历 PDF");
-  try {
+  return withEgoSlot({ scope: "RENDER", label: "导出定制简历 PDF", kind: "INTERACTIVE", onLog }, async () => {
     onLog("正在生成高保真矢量定制简历 PDF...");
     const code = `
 const fs = await import("node:fs");
@@ -1863,13 +1974,11 @@ fs.mkdirSync(path.dirname(outFile), { recursive: true });
 fs.writeFileSync(outFile, Buffer.from(pdfRes.data, "base64"));
 console.log("RESULT_JSON:" + JSON.stringify({ ok: true, path: outFile, bytes: Buffer.from(pdfRes.data, "base64").length }));
 `;
-    const { combined } = await runEgoScript("export-pdf", code, 45_000);
+    const { combined } = await runEgoScript("export-pdf", code, 45_000, { scope: "RENDER" });
     const res = parseMarkedJson(combined);
     onLog(`✅ 已导出定制 PDF 简历（${Math.round((res.bytes || 0) / 1024)} KB）`);
     return res;
-  } finally {
-    releaseLock();
-  }
+  });
 }
 
 const BAIDU_CITY_CODES = {
@@ -1894,8 +2003,7 @@ export async function enrichJobDetailsAndCommuteViaEgo({
   }
   if (!jobs.length) return { homeResolved: null, items: [] };
 
-  acquireLock(`测算办公地点与单车+地铁通勤（${jobs.length} 个岗位）`);
-  try {
+  return withEgoSlot({ scope: profileId, label: `测算办公地点与单车+地铁通勤（${jobs.length} 个岗位）`, kind: "PATROL", onLog }, async () => {
     const cityCode = BAIDU_CITY_CODES[homeCity] || 257;
     const payloadJobs = jobs.map((j) => ({
       id: j.id,
@@ -2053,7 +2161,7 @@ for (const job of jobs) {
 }
 console.log("RESULT_JSON:" + JSON.stringify({ status: "OK", homePt, items }));
 `;
-    const { combined, stderr } = await runEgoScript("enrich-commute", code, Math.max(90_000, jobs.length * 12_000));
+    const { combined, stderr } = await runEgoScript("enrich-commute", code, Math.max(90_000, jobs.length * 12_000), { scope: profileId });
     if (stderr) {
       for (const line of stderr.split(/\r?\n/).filter((l) => l && !l.startsWith("RESULT_JSON:"))) onLog(line);
     }
@@ -2075,7 +2183,5 @@ console.log("RESULT_JSON:" + JSON.stringify({ status: "OK", homePt, items }));
     });
     onLog(`✅ 已完成 ${enriched.length} 个岗位的单车+地铁通勤测算`);
     return { homeResolved: raw.homePt, items: enriched };
-  } finally {
-    releaseLock();
-  }
+  });
 }
