@@ -1101,11 +1101,20 @@ if (verifyState.unavailable) {
 await page.mouse.wheel(0, 220, { label: "review job before chat" }).catch(() => {});
 await page.waitForTimeout(randDelay(1000, 1800));
 
-if (verifyState.chatBtnText.includes("立即沟通")) {
-  await page.click(".btn-startchat, .op-btn-chat", { label: "click start chat" });
+// Boss 页面滚动后底部/吸顶栏会同时出现 2 个 .btn-startchat，先打唯一属性再点击，避免 ego-browser 报 ElementResolutionError
+const taggedStartChat = await page.evaluate(() => {
+  document.querySelectorAll("[data-ego-startchat]").forEach((el) => el.removeAttribute("data-ego-startchat"));
+  const btn = document.querySelector(".job-banner .btn-startchat, .info-primary .btn-startchat, .btn-startchat, .op-btn-chat");
+  if (!btn) return "";
+  btn.setAttribute("data-ego-startchat", "1");
+  return (btn.innerText || "").trim();
+}).catch(() => "");
+
+if ((taggedStartChat || verifyState.chatBtnText).includes("立即沟通")) {
+  await page.click("[data-ego-startchat='1']", { label: "click start chat" });
   await page.waitForTimeout(randDelay(2200, 3400));
-} else if (verifyState.chatBtnText.includes("继续沟通")) {
-  await page.click(".btn-startchat, .op-btn-chat", { label: "open existing chat" });
+} else if ((taggedStartChat || verifyState.chatBtnText).includes("继续沟通")) {
+  await page.click("[data-ego-startchat='1']", { label: "open existing chat" });
   await page.waitForTimeout(randDelay(2000, 3000));
 }
 
@@ -1144,9 +1153,20 @@ if (hasInput && shouldSendText) {
   });
   await page.waitForTimeout(randDelay(700, 1200));
   if (shouldAutoSend) {
-    await page.click("button.btn-send, .btn-send", { label: "send greeting message" }).catch(async () => {
+    const hasUniqueSendBtn = await page.evaluate(() => {
+      document.querySelectorAll("[data-ego-sendbtn]").forEach((el) => el.removeAttribute("data-ego-sendbtn"));
+      const btn = document.querySelector(".greet-boss-dialog .btn-send, .chat-conversation button.btn-send, button.btn-send, .btn-send");
+      if (!btn) return false;
+      btn.setAttribute("data-ego-sendbtn", "1");
+      return true;
+    }).catch(() => false);
+    if (hasUniqueSendBtn) {
+      await page.click("[data-ego-sendbtn='1']", { label: "send greeting message" }).catch(async () => {
+        await page.press(inputSelector, "Enter");
+      });
+    } else {
       await page.press(inputSelector, "Enter");
-    });
+    }
     textSent = true;
     await page.waitForTimeout(randDelay(1400, 2200));
   }
@@ -1170,11 +1190,14 @@ async function inspectChatImgBtn() {
 if (shouldSendImg) {
   const canOpenChat = await page.evaluate(() => {
     if (!location.pathname.includes("/job_detail/")) return false;
-    const btn = document.querySelector(".btn-startchat, .op-btn-chat");
-    return Boolean(btn && (btn.innerText || "").includes("继续沟通"));
+    document.querySelectorAll("[data-ego-continuechat]").forEach((el) => el.removeAttribute("data-ego-continuechat"));
+    const btn = document.querySelector(".job-banner .btn-startchat, .btn-startchat, .op-btn-chat");
+    if (!btn || !(btn.innerText || "").includes("继续沟通")) return false;
+    btn.setAttribute("data-ego-continuechat", "1");
+    return true;
   }).catch(() => false);
   if (canOpenChat) {
-    await page.click(".btn-startchat, .op-btn-chat", { label: "enter full chat for image" }).catch(() => {});
+    await page.click("[data-ego-continuechat='1']", { label: "enter full chat for image" }).catch(() => {});
     await page.waitForTimeout(randDelay(1800, 2500));
   }
 

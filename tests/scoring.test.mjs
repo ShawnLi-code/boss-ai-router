@@ -835,6 +835,8 @@ test("投递脚本构建与下线职位检测：避免 onlySendImage ReferenceEr
   assert.match(script, /const onlySendImage = false;/);
   assert.match(script, /JOB_UNAVAILABLE/);
   assert.match(script, /web\/geek\/chat/);
+  assert.ok(!script.includes('page.click(".btn-startchat, .op-btn-chat"'));
+  assert.match(script, /data-ego-startchat/);
   assert.doesNotThrow(() => new vm.Script(`async function _check() {\n${script}\n}`));
 
   const { id: failJobId } = upsertJob({

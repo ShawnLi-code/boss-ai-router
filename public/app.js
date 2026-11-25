@@ -299,6 +299,8 @@ document.querySelectorAll(".seg-btn[data-filter]").forEach((btn) => {
     btn.classList.add("active");
     state.activeFilter = btn.dataset.filter;
     els.btnPurgeFiltered.hidden = state.activeFilter !== "FILTERED" || Number(els.cntFiltered.textContent || 0) === 0;
+    const retryBtn = document.getElementById("btn-retry-failed");
+    if (retryBtn) retryBtn.hidden = state.activeFilter !== "DELIVERY_LOGS" || getRetryableFailedJobIds().length === 0;
     renderJobList();
     renderInspector(true);
   });
@@ -433,6 +435,11 @@ function renderSidebarSummary() {
   els.cntContacted.textContent = contacted.length;
   els.cntFiltered.textContent = filtered.length;
   if (els.cntDeliveryLogs) els.cntDeliveryLogs.textContent = getDeliveryAttemptLogs().length;
+  const retryFailedIds = getRetryableFailedJobIds();
+  const retryBtn = document.getElementById("btn-retry-failed");
+  const retryCnt = document.getElementById("cnt-retry-failed");
+  if (retryCnt) retryCnt.textContent = String(retryFailedIds.length);
+  if (retryBtn) retryBtn.hidden = state.activeFilter !== "DELIVERY_LOGS" || retryFailedIds.length === 0;
   els.btnPurgeFiltered.hidden = state.activeFilter !== "FILTERED" || filtered.length === 0;
 
   const t1 = tracks[0];
@@ -605,6 +612,22 @@ function getDeliveryAttemptLogs() {
   return (state.data?.logs || []).filter(
     (l) => l.action !== "BOSS_HISTORY_SYNC" && l.action !== "MANUAL_SYNC"
   );
+}
+
+function getRetryableFailedJobIds() {
+  const latestByJob = new Map();
+  for (const l of getDeliveryAttemptLogs()) {
+    if (l.job_id && !latestByJob.has(l.job_id)) latestByJob.set(l.job_id, l);
+  }
+  const jobMap = new Map((state.data?.jobs || []).map((j) => [j.id, j]));
+  const ids = [];
+  for (const [jid, l] of latestByJob) {
+    if (l.status !== "FAILED") continue;
+    const job = jobMap.get(jid);
+    if (!job || job.blacklisted || CONTACTED_STATUSES.has(job.status)) continue;
+    ids.push(jid);
+  }
+  return ids;
 }
 
 function renderDeliveryAttemptRows() {
@@ -2645,11 +2668,31 @@ els.btnBatchDeliver?.addEventListener("click", async () => {
       ? `⚠️ 批量队列因安全验证已暂停：成功 ${okCount} 条、防重跳过 ${skippedCount} 条`
       : state.batchAbortRequested
         ? `⏹️ 已手动停止批量投递：成功 ${okCount} 条、跳过 ${skippedCount} 条、失败 ${failedCount} 条`
-        : `✅ 批量投递完成：成功 ${okCount} 条、防重/黑名单跳过 ${skippedCount} 条、失败 ${failedCount} 条`;
+        : `✅ 批量投递完成：成功 ${okCount} 条、防重/黑名单跳过 ${skippedCount} 条、失败 ${failedCount} 条${failedCount > 0 ? "\n\n可切到「投递记录」Tab 查看每条原因，并点「🔄 重选失败岗」一键重投。" : ""}`;
     if (els.batchProgressText) els.batchProgressText.textContent = summary;
     els.liveLogLatest.textContent = summary;
     alert(summary);
   }
+});
+
+document.getElementById("btn-retry-failed")?.addEventListener("click", () => {
+  const ids = getRetryableFailedJobIds();
+  if (ids.length === 0) {
+    alert("当前没有可重试的失败岗位。");
+    return;
+  }
+  state.batchMode = true;
+  state.batchSelectedIds = new Set(ids);
+  document.querySelectorAll(".seg-btn[data-filter]").forEach((b) => {
+    b.classList.toggle("active", b.dataset.filter === "ALL");
+  });
+  state.activeFilter = "ALL";
+  const retryBtn = document.getElementById("btn-retry-failed");
+  if (retryBtn) retryBtn.hidden = true;
+  updateBatchBarUi();
+  renderJobList();
+  renderInspector(true);
+  els.liveLogLatest.textContent = `🔄 已选中 ${ids.length} 个此前失败岗位，确认话术与账号后点右侧「批量一键打招呼」即可重试`;
 });
 
 // Watchlist drawer handlers

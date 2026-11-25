@@ -1705,6 +1705,8 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
           onLog: (m) => logEvent(m),
         });
       } catch (deliverErr) {
+        const rawErr = String(deliverErr?.message || "投递执行异常");
+        const cleanErrLine = rawErr.split(/\r?\n/).find((l) => /Error:|不存在|下线|仅允许|超时|验证/.test(l)) || rawErr;
         addDeliveryLog({
           job_id: job.id,
           company_name: job.company_name,
@@ -1717,7 +1719,7 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
           image_sent: false,
           image_status: (job.tailored_resume || {}).image_delivery || "NONE",
           status: "FAILED",
-          detail: String(deliverErr?.message || "投递执行异常").slice(0, 220),
+          detail: cleanErrLine.trim().slice(0, 240),
         });
         throw deliverErr;
       }
