@@ -1499,11 +1499,21 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
       }
 
       const prevMsgs = Array.isArray(job.chat_messages) ? [...job.chat_messages] : [];
+      const nowTime = new Date().toTimeString().slice(0, 5);
       if (sendRes.textSent && replyText) {
         prevMsgs.push({
           sender: "ME",
-          time: new Date().toTimeString().slice(0, 5),
+          time: nowTime,
           text: replyText,
+        });
+      }
+      if (sendRes.imageSent) {
+        prevMsgs.push({
+          sender: "ME",
+          time: nowTime,
+          kind: "image",
+          text: "[图片简历]",
+          imageUrl: "/api/resume-image",
         });
       }
       const prevTailored = job.tailored_resume || {};

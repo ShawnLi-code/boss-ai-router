@@ -1,85 +1,195 @@
 import { isLlmConfigured } from "./llm.mjs";
 
-function pickResumeHighlights(job = {}, resume = {}) {
-  const skills = Array.isArray(resume.skills) ? resume.skills.slice(0, 6) : [];
+const TECH_TOPIC_RULES = [
+  { key: "ui_auto", label: "UI自动化", regex: /ui\s*自动化|ui自动化|selenium|playwright|cypress|puppeteer|appium|airtest/i },
+  { key: "perf_test", label: "性能压测", regex: /性能测试|压测|jmeter|loadrunner|locust/i },
+  { key: "app_test", label: "App/移动端测试", regex: /app测试|移动端|ios测试|android测试|\badb\b|monkey/i },
+  { key: "api_auto", label: "接口自动化", regex: /接口自动化|api自动化|接口测试|pytest|postman|requests|rest/i },
+  { key: "ai_eval", label: "AI/大模型测试", regex: /大模型|\bllm\b|\brag\b|\bagent\b|智能体|评测|提示词|prompt|\bai\b/i },
+  { key: "security_test", label: "安全测试", regex: /安全测试|渗透|漏洞/i },
+  { key: "java_stack", label: "Java", regex: /\bjava\b/i },
+  { key: "python_stack", label: "Python", regex: /\bpython\b/i },
+  { key: "sql_db", label: "SQL/数据库", regex: /\bsql\b|mysql|数据库/i },
+];
+
+function cleanResumeText(str = "") {
+  return String(str || "")
+    .replace(/^[•·\-*\d.、\s]+/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function pickNaturalClause(raw = "", maxLen = 42) {
+  const cleaned = cleanResumeText(raw);
+  if (!cleaned) return "";
+  if (cleaned.length <= maxLen) return cleaned;
+  const parts = cleaned.split(/[，,。；;]/).map((s) => s.trim()).filter(Boolean);
+  let out = "";
+  for (const p of parts) {
+    const next = out ? `${out}，${p}` : p;
+    if (next.length > maxLen) break;
+    out = next;
+  }
+  return out || "";
+}
+
+function analyzeResumeCapabilities(job = {}, resume = {}) {
+  const skills = Array.isArray(resume.skills) ? resume.skills.map((s) => String(s).trim()).filter(Boolean) : [];
   const exps = Array.isArray(resume.experiences) ? resume.experiences : [];
   const projects = Array.isArray(resume.projects) ? resume.projects : [];
-  const firstExp = exps[0]?.content || "";
-  const firstProj = projects[0]?.name || "";
-  const years = resume.years_label || "1年经验";
-  const matched = Array.isArray(job.match?.matched_keywords) ? job.match.matched_keywords.slice(0, 4) : [];
-  const coreSkills = matched.length ? matched.join("、") : (skills.slice(0, 4).join("、") || "功能/接口/自动化测试");
+  const firstExp = cleanResumeText(exps[0]?.content || "");
+  const firstProjName = cleanResumeText(projects[0]?.name || "");
+  const firstProjDesc = cleanResumeText(projects[0]?.content || projects[0]?.description || "");
+  const resumeCorpus = [
+    resume.summary || "",
+    skills.join(" "),
+    exps.map((e) => `${e.role || ""} ${e.content || ""}`).join(" "),
+    projects.map((p) => `${p.name || ""} ${p.content || p.description || ""}`).join(" "),
+  ].join(" ");
 
-  const hasAiTest = /AI|大模型|RAG|提示词|智能体|Agent/i.test(`${job.job_title} ${job.jd_text} ${resume.summary} ${firstExp} ${firstProj}`);
+  const years = resume.years_label || "1年经验";
+  const matched = Array.isArray(job.match?.matched_keywords) ? job.match.matched_keywords.slice(0, 3) : [];
+  const coreSkills = matched.length ? matched.join("、") : (skills.slice(0, 3).join("、") || "功能与接口测试");
+
+  const hasAiTest = /AI|大模型|RAG|提示词|智能体|Agent/i.test(resumeCorpus);
+  const hasApiAuto = /接口自动化|接口测试|Pytest|Postman|Python/i.test(resumeCorpus);
+  const spokenStrength = hasAiTest && hasApiAuto
+    ? "AI应用测试和接口自动化"
+    : hasAiTest
+      ? "AI应用功能与评测"
+      : hasApiAuto
+        ? "功能测试和接口自动化"
+        : (skills.slice(0, 2).join("和") || "功能测试与问题排查");
+
   const highlightPhrase = hasAiTest
-    ? "独立负责大模型/AI智能体与全链路接口、自动化测试及自研测试平台落地"
-    : "独立负责Web/客户端全流程测试、接口自动化及抓包排障闭环";
+    ? "主要做大模型/AI功能测试、接口自动化和日常排查"
+    : "主要做全流程功能测试、接口自动化和抓包定位";
 
   return {
     years,
     coreSkills,
-    firstProj,
-    hasAiTest,
+    spokenStrength,
     highlightPhrase,
-    expSnippet: firstExp.replace(/\s+/g, " ").slice(0, 56),
+    firstProjName,
+    expClause: pickNaturalClause(firstExp || firstProjDesc, 38),
+    resumeCorpus,
   };
 }
 
-function detectConversationIntent(lastHrText = "", allHrText = "") {
-  const text = String(lastHrText || allHrText || "").trim();
-  if (!text) {
+function evaluateAskedTopics(lastHrText = "", resumeCorpus = "") {
+  const text = String(lastHrText || "");
+  const asked = TECH_TOPIC_RULES.filter((r) => r.regex.test(text));
+  const matched = asked.filter((r) => r.regex.test(resumeCorpus));
+  const missing = asked.filter((r) => !r.regex.test(resumeCorpus));
+  const isDurationQ = /多久|几年|多长时间|多少年|做了几年/.test(text);
+  return { asked, matched, missing, isDurationQ };
+}
+
+function detectConversationIntent(cleanMsgs = [], customHint = "", hl = {}) {
+  const hrMsgs = cleanMsgs.filter((m) => m.sender === "HR");
+  const lastMsg = cleanMsgs[cleanMsgs.length - 1];
+  const hint = String(customHint || "").trim();
+
+  if (hrMsgs.length === 0 && !hint) {
     return {
       intent: "NO_REPLY_YET",
       intent_label: "等待 HR 首轮回复 / 主动破冰",
-      strategy_tip: "对方暂未回复（Boss 在 HR 回复前默认锁图片），建议先保持耐心或隔 1 天补充一条高价值短句，避免高频催促。",
+      strategy_tip: "对方还没回消息（HR 回复前 Boss 通常限制发图）。隔天再简短补一句就好，别连发多条。",
+      lastHrText: "",
+      topicCheck: { asked: [], matched: [], missing: [], isDurationQ: false },
     };
   }
-  if (/需要.*?\d+年|年限|经验不(?:够|足)|至少\d+年|偏初级|年限要求|只招\d+年/.test(text)) {
+
+  // 若对话里有 HR 提问，且最后一条已经由「我」回答过（没有新粘贴 HR 消息），提示已回复状态
+  if (!hint && hrMsgs.length > 0 && lastMsg?.sender === "ME") {
+    const myRecentText = cleanMsgs.slice().reverse().find((m) => m.sender === "ME");
+    const sentImgRecently = cleanMsgs.slice(cleanMsgs.findLastIndex((m) => m.sender === "HR") + 1).some((m) => m.kind === "image" || /图片/.test(m.text));
+    return {
+      intent: "WAITING_AFTER_MY_REPLY",
+      intent_label: "你已回复对方，当前建议等 HR 查看",
+      strategy_tip: `你${myRecentText?.time ? `在 ${myRecentText.time} ` : ""}已经回过对方${sentImgRecently ? "并附上了图片简历" : ""}，别再重复回答同一个问题。先等对方反馈；如果过半天没回想轻推一句，再从下方挑一条短句。`,
+      lastHrText: hrMsgs[hrMsgs.length - 1]?.text || "",
+      sentImgRecently,
+      topicCheck: { asked: [], matched: [], missing: [], isDurationQ: false },
+    };
+  }
+
+  const text = hint || hrMsgs[hrMsgs.length - 1]?.text || "";
+  const topicCheck = evaluateAskedTopics(text, hl.resumeCorpus);
+
+  if (/需要.*?\d+年|经验不(?:够|足)|至少\d+年|偏初级|年限要求|只招\d+年/.test(text)) {
     return {
       intent: "EXP_GAP",
-      intent_label: "HR 认为工作年限偏短 / 卡年限",
-      strategy_tip: "千万别虚构年限！策略是「承认真实年限 + 用高密度自研/全链路实战成果对冲 + 低成本验证（做题/短聊）」；若对方确实硬性卡死则体面收尾并留好感度。",
+      intent_label: "HR 顾虑工作年限偏短 / 卡年限",
+      strategy_tip: "不要虚构年限！直接认真实年限，强调自己独立扛过核心测试项目、上手快，不行就体面收尾省得互相耽误。",
+      lastHrText: text,
+      topicCheck,
     };
   }
   if (/暂不合适|不合适|已招满|暂不考虑|遗憾|先这样|感谢投递/.test(text) && !/简历/.test(text)) {
     return {
       intent: "POLITE_REJECT",
       intent_label: "HR 礼貌婉拒 / 感谢投递",
-      strategy_tip: "大概率岗位条件卡死，礼貌致谢即可；如果对这家公司业务很感兴趣，可以顺便礼貌询问团队是否有相近测试岗或初级岗。",
+      strategy_tip: "对方大概率是硬性条件卡死了，礼貌谢过就行；如果特别想去，顺口问一句组里有没有初级或相近测试岗。",
+      lastHrText: text,
+      topicCheck,
     };
   }
   if (/发.*简历|看看简历|附件简历|微信|加[vV]|微信号|vx|WX|联系方式|邮箱/.test(text)) {
     return {
       intent: "ASK_RESUME",
-      intent_label: "HR 索要简历 / 联系方式",
-      strategy_tip: "HR 已经回复，此时 Boss 图片/附件简历已解锁！建议直接发一句高匹配短语并勾选「顺带发图片简历」一键发出。",
+      intent_label: "HR 主动要简历 / 联系方式",
+      strategy_tip: "HR 已经开口要简历了，直接简短回一句并勾选下方「顺带发出高清图片简历」一次发过去。",
+      lastHrText: text,
+      topicCheck,
     };
   }
   if (/面试|约.*时间|方便.*聊|线下面|视频面|腾讯会议|电话沟通|来公司|几点方便/.test(text)) {
     return {
       intent: "INTERVIEW_INVITE",
       intent_label: "HR 邀约面试 / 约沟通时间",
-      strategy_tip: "先爽快确认时间与方式，顺带礼貌核实办公地点/面试侧重点或岗位工作制（是否双休、核心考核方向），避免白跑一趟。",
+      strategy_tip: "先爽快约时间，同时顺便问一句线上还是线下、大概几轮/看重哪块，以及是否双休，免得白跑。",
+      lastHrText: text,
+      topicCheck,
     };
   }
   if (/期望薪资|目前薪资|薪资要求|几时到岗|最快入职|在职|离职|到岗/.test(text)) {
     return {
       intent: "ASK_SALARY_OR_TIME",
       intent_label: "询问薪资期望 / 到岗时间",
-      strategy_tip: "薪资建议锚定 9-12K 目标区间（或先确认岗位定级与薪资结构），同时明确自己可以快速配合到岗。",
+      strategy_tip: "直接报目标区间并说明到岗灵活，顺便自然问一下岗位薪资结构和工作制。",
+      lastHrText: text,
+      topicCheck,
     };
   }
-  if (/自动化|接口|性能|压测|AI|大模型|RAG|提示词|做过|负责什么|项目|框架|Python|Java|抓包|SQL/.test(text)) {
+  if (topicCheck.missing.length > 0 && topicCheck.matched.length === 0) {
+    const askedLabel = topicCheck.missing.map((t) => t.label).join("、");
+    return {
+      intent: "SKILL_GAP_HONEST",
+      intent_label: `HR 追问「${askedLabel}」经验（与当前简历主线不完全重合）`,
+      strategy_tip: `千万别硬吹「这块实战很多」！直接坦白之前主要做「${hl.spokenStrength}」，「${askedLabel}」实际做得少，再说一句思路相通、现在用 AI 辅助写脚本补起来很快，并顺便问清岗位实际工作占比最真实。`,
+      lastHrText: text,
+      topicCheck,
+    };
+  }
+  if (topicCheck.matched.length > 0 || /做过|负责什么|项目|框架|怎么测|测试流程|抓包/.test(text)) {
+    const matchedLabel = topicCheck.matched.map((t) => t.label).join("、") || hl.coreSkills;
     return {
       intent: "TECH_PROBE",
-      intent_label: "HR/业务方追问技术栈与项目细节",
-      strategy_tip: "用「做了什么 + 用什么工具/方案 + 量化结果/闭环效果」100 字内简明作答，直接命中对方想考察的点。",
+      intent_label: `HR/业务方了解「${matchedLabel}」实战情况`,
+      strategy_tip: topicCheck.isDurationQ
+        ? "对方在问做过多久：直接报真实时间 + 一句大白话说明平时具体干了啥就行，别背简历条文。"
+        : "用大白话讲清楚「平时怎么测、解决过什么问题」，控制在 80 字以内最容易让对方继续聊。",
+      lastHrText: text,
+      topicCheck,
     };
   }
   return {
     intent: "GENERAL_FOLLOWUP",
-    intent_label: "常规互动 / 继续推进沟通",
-    strategy_tip: "结合岗位亮点简短回应，并顺势发送高清图片简历或礼貌确认工作制（双休/核心职责）与下一步安排。",
+    intent_label: "常规沟通 / 继续推进",
+    strategy_tip: "顺着对方的话自然接一句，同时附发图片简历或顺便了解岗位业务与双休情况。",
+    lastHrText: text,
+    topicCheck,
   };
 }
 
@@ -94,33 +204,80 @@ export function analyzeConversationAndSuggestReplies({
   settings = {},
 } = {}) {
   const cleanMsgs = (Array.isArray(messages) ? messages : [])
-    .filter((m) => m && m.text && m.sender !== "SYSTEM")
-    .map((m) => ({ sender: m.sender === "ME" ? "ME" : "HR", text: String(m.text).trim(), time: m.time || "" }));
+    .filter((m) => m && (m.text || m.imageUrl) && m.sender !== "SYSTEM")
+    .map((m) => ({
+      sender: m.sender === "ME" ? "ME" : "HR",
+      text: String(m.text || "[图片消息]").trim(),
+      kind: m.kind || (m.imageUrl ? "image" : "text"),
+      time: m.time || "",
+    }));
 
-  const hrMsgs = cleanMsgs.filter((m) => m.sender === "HR");
-  const lastHrText = customHint.trim() || hrMsgs[hrMsgs.length - 1]?.text || "";
-  const allHrText = hrMsgs.map((m) => m.text).join("\n");
-  const hl = pickResumeHighlights(job, resume);
-  const { intent, intent_label, strategy_tip } = detectConversationIntent(lastHrText, allHrText);
-  const roleName = job.job_title || "该岗位";
+  const hl = analyzeResumeCapabilities(job, resume);
+  const { intent, intent_label, strategy_tip, lastHrText, sentImgRecently, topicCheck } = detectConversationIntent(cleanMsgs, customHint, hl);
+  const roleName = job.job_title || "这个岗位";
   const salIdealMin = settings.target_salary_min_k || "9";
   const salIdealMax = settings.target_salary_max_k || "12";
 
   let templates = [];
 
-  if (intent === "EXP_GAP") {
+  if (intent === "WAITING_AFTER_MY_REPLY") {
+    templates = [
+      {
+        key: "gentle_ping",
+        label: "礼貌确认是否收到",
+        tag: "轻量跟进",
+        text: sentImgRecently
+          ? `您好，刚才把情况说明和简历图片发您了，您忙完方便扫一眼~ 要是有哪里想进一步了解随时喊我。`
+          : `您好，刚才简单回了下您的消息；如果您方便的话我再把一页图片简历发您看看，上面项目细节更全一些~`,
+      },
+      {
+        key: "ask_daily_split",
+        label: "顺便了解团队分工",
+        tag: "开启新话题",
+        text: `对了，方便提前了解下咱们组这个岗日常主要测哪块业务呀？功能、接口和专项测试大概怎么分配呢？`,
+      },
+      {
+        key: "wait_calmly",
+        label: "不打扰客气收一句",
+        tag: "佛系稳妥",
+        text: `您先忙工作，简历放这儿您抽空看就行，如果觉得大方向合适随时叫我~`,
+      },
+    ];
+  } else if (intent === "SKILL_GAP_HONEST") {
+    const askedName = topicCheck.missing.map((t) => t.label).join("、") || "这块专项";
+    templates = [
+      {
+        key: "honest_transfer",
+        label: "坦诚现状+可快速补齐",
+        tag: "推荐 · 说人话",
+        text: `实话讲，${askedName}我在之前项目里单独写得不算多，主要还是做${hl.spokenStrength}为主。不过自动化断言和排查逻辑是相通的，现在配合 AI 辅助生成脚本上手很快，您可以先看看我简历判断下~`,
+      },
+      {
+        key: "ask_real_ratio",
+        label: "反问岗位实际比例",
+        tag: "防踩坑",
+        text: `${askedName}这块我实战相对少一些，过往重点在${hl.spokenStrength}。方便问下咱们这个岗进组后是纯写${askedName}脚本，还是功能、接口和业务测试都会一起扛呢？`,
+      },
+      {
+        key: "short_sincere",
+        label: "简短真诚不画饼",
+        tag: "简洁版",
+        text: `我之前项目重心在${hl.spokenStrength}，${askedName}确实用得少；如果团队需要很快能上手干活的，我学习补齐挺快的，方便先发份简历给您看下过往产出吗？`,
+      },
+    ];
+  } else if (intent === "EXP_GAP") {
     templates = [
       {
         key: "impact",
-        label: "高密度实战对冲",
+        label: "坦诚年限+实干上手快",
         tag: "推荐尝试",
-        text: `理解您对年限的考虑！我虽然目前是${hl.years}，但在公司${hl.highlightPhrase}（覆盖 ${hl.coreSkills}），上手密度比较高。如果不卡死硬性年限，希望能发您一份简历看下项目匹配度，也欢迎出题或约 10 分钟初聊验真~`,
+        text: `理解您看重经验！我目前确实是${hl.years}，不过平时一直在独立扛项目里的${hl.spokenStrength}，排障和推进习惯挺扎实的。如果年限不是一刀切，希望能发简历给您看看实际做的东西~`,
       },
       {
         key: "probe_junior",
-        label: "体面留缘+探其他岗",
+        label: "体面留余地+问相近岗",
         tag: "留备用机会",
-        text: `感谢您的坦诚回复！明白贵司「${roleName}」优先考虑 3 年以上候选人；我在现有经历里主要深耕 ${hl.coreSkills}，自驱力和排障能力比较扎实，若团队后续有看重实战能力的初/中级测试机会，也希望您能优先考虑我，祝招贤顺利！`,
+        text: `明白，如果「${roleName}」硬性要 3 年以上也没关系，多谢您提前告知！要是有偏${hl.spokenStrength}的初/中级测试坑位，也欢迎优先考虑我，祝招人顺利~`,
       },
       {
         key: "polite_close",
@@ -135,13 +292,13 @@ export function analyzeConversationAndSuggestReplies({
         key: "polite_thanks",
         label: "体面致谢留好感",
         tag: "推荐",
-        text: `好的谢谢您回复！如果后续贵司测试团队有合适 ${hl.years}、侧重 ${hl.coreSkills} 的岗位机会，欢迎再联系我，祝招聘顺利！`,
+        text: `好的谢谢您回复！如果后续贵司测试团队有适合 ${hl.years}、侧重${hl.spokenStrength}的机会，欢迎再联系我，祝招聘顺利！`,
       },
       {
         key: "ask_other_role",
         label: "顺带探问相近岗位",
         tag: "挖潜机会",
-        text: `感谢反馈！方便顺便请问下，团队目前还有偏功能/接口或 AI 评测方向的测试岗位在看人吗？我目前 ${hl.highlightPhrase}，可以快速上手。`,
+        text: `感谢告知！顺便请教下，咱们团队最近还有偏功能、接口或 AI 测试方向的其他岗位在招吗？我这块上手挺快的。`,
       },
       {
         key: "short_ack",
@@ -154,19 +311,19 @@ export function analyzeConversationAndSuggestReplies({
     templates = [
       {
         key: "send_with_hl",
-        label: "发简历+高亮匹配点",
+        label: "发简历+带一句对口点",
         tag: "最稳妥",
-        text: `好的，马上发您一份最新简历请查收！我目前重点匹配贵司「${roleName}」要求的 ${hl.coreSkills}，有疑问随时沟通，期待进一步交流。`,
+        text: `好的，马上把高清简历发您查收！我平时主要做${hl.spokenStrength}，跟这个岗位挺贴的，您看下有想了解的随时问我~`,
       },
       {
         key: "send_and_ask",
-        label: "发简历+确认工作安排",
-        tag: "高效双向评估",
-        text: `简历已发送给您查收~ 我过往${hl.highlightPhrase}。方便问下该岗位日常是否双休、主要负责哪块业务线呢？`,
+        label: "发简历+顺便问工作制",
+        tag: "双向了解",
+        text: `简历发您啦，请查收~ 顺便想了解下咱们这个岗位日常是双休吗，主要负责哪条业务线的测试呢？`,
       },
       {
         key: "send_short",
-        label: "简明发送",
+        label: "简明直接发送",
         tag: "简洁版",
         text: `好的，这边已把高清图片简历发在聊天里，您随时查看，有需要补充的信息我随时发您！`,
       },
@@ -175,15 +332,15 @@ export function analyzeConversationAndSuggestReplies({
     templates = [
       {
         key: "confirm_time",
-        label: "爽快确认+问考察重点",
+        label: "爽快约时间+问考察重点",
         tag: "推荐",
-        text: `好的没问题，我时间比较灵活（明天/本周工作日下午都可以）！方便请问下是线上面试还是线下，主要几轮、重点考察哪块技术呢，我提前做好准备。`,
+        text: `好的没问题，我明天或这周工作日下午都方便！想提前确认下是线上面试还是到司面、大概几轮呢，我提前准备下。`,
       },
       {
         key: "confirm_detail",
-        label: "确认地址与工作制",
+        label: "确认地点、双休与薪资",
         tag: "防白跑",
-        text: `可以的，感谢邀约！请问面试具体时间和地点方便发我下吗？另外想提前确认下岗位工作时间是否是双休、薪资范围大概在什么区间呢？`,
+        text: `可以的，感谢邀约！麻烦发我下具体面试时间和地址~ 另外顺便确认下岗位是否双休、薪资大致在什么范围呢？`,
       },
       {
         key: "fast_agree",
@@ -196,84 +353,88 @@ export function analyzeConversationAndSuggestReplies({
     templates = [
       {
         key: "salary_range",
-        label: "锚定目标薪资+看重空间",
+        label: "报期望薪资+快速到岗",
         tag: "推荐",
-        text: `我目前期望薪资在 ${salIdealMin}-${salIdealMax}K 左右（具体也可结合团队薪资结构与绩效沟通），如果双方匹配度高，最快可以一周内/协商确定时间到岗。`,
+        text: `我目前期望薪资在 ${salIdealMin}-${salIdealMax}K 左右（具体也可以结合定级和奖金结构聊），如果双方合适，我一周内就能办理入职到岗。`,
       },
       {
         key: "salary_ask_struct",
-        label: "先反问定级与薪资结构",
+        label: "报范围+反问定级结构",
         tag: "稳健谈判",
-        text: `我主要看重岗位匹配度与团队氛围，期望月薪参考 ${salIdealMin}-${salIdealMax}K，到岗时间很灵活。也想先了解下贵司该岗位的薪资定级、社保公积金与双休情况？`,
+        text: `期望月薪主要看 ${salIdealMin}-${salIdealMax}K，到岗时间很灵活。想顺便问下咱们这个岗对应的薪资结构、公积金和是否双休呢？`,
       },
       {
         key: "availability",
-        label: "重点强调快速到岗",
+        label: "强调随时能到岗",
         tag: "效率优先",
-        text: `我目前可随时沟通并尽快安排到岗，期望月薪在 ${salIdealMin}-${salIdealMax}K 区间，如果核心能力符合团队要求咱们可以进一步约聊！`,
+        text: `我现在随时可以安排到岗，期望月薪在 ${salIdealMin}-${salIdealMax}K 区间，如果能力匹配咱们随时约聊！`,
       },
     ];
   } else if (intent === "TECH_PROBE") {
+    const matchedName = topicCheck.matched.map((t) => t.label).join("、") || hl.spokenStrength;
+    const concreteTail = hl.expClause ? `，之前在项目里主要负责${hl.expClause}` : "";
     templates = [
       {
         key: "tech_concrete",
-        label: "用项目实绩直接作答",
-        tag: "推荐",
-        text: `这块我实战比较多：在近期项目里${hl.highlightPhrase}，常用 ${hl.coreSkills}${hl.expSnippet ? `（${hl.expSnippet.slice(0, 32)}…）` : ""}。可以发份简历给您看详细案例！`,
+        label: topicCheck.isDurationQ ? "按真实年限+项目大白话回答" : "用项目里干过的实事直接答",
+        tag: "推荐 · 说人话",
+        text: topicCheck.isDurationQ
+          ? `${matchedName}我实际做了有 ${hl.years}了${concreteTail}。平时定位 Bug、写回归脚本和提效都自己扛，细节都在简历里，我发您看下？`
+          : `${matchedName}这块我一直有在做${concreteTail}，常用 ${hl.coreSkills}。平时都是自己写用例、跑回归再抓包定位问题，方便的话我发您简历看具体案例~`,
       },
       {
         key: "tech_deep",
-        label: "补充工具与闭环思维",
-        tag: "突出深度",
-        text: `是的，我日常测试除了用例设计与接口回归，还会自己写脚本做自动化断言、用抓包与日志排查定位线上 Bug，保证问题可复现可闭环，和贵司要求非常对口。`,
+        label: "补充日常排障与闭环习惯",
+        tag: "突出务实",
+        text: `日常测需求除了功能与接口验证，我也习惯抓包看请求日志、写点小脚本跑回归和对比数据，尽量把问题复现步骤拆透后再抛给开发，沟通效率会高很多。`,
       },
       {
         key: "tech_chat",
-        label: "约电话/语音细聊技术",
+        label: "发简历+约几分钟短聊",
         tag: "高效推进",
-        text: `这几个技术方向我都有实际落地经验，三言两语聊不细，如果您感兴趣我可以先把简历发您，或者方便约个 10 分钟语音/线上沟通具体拆解！`,
+        text: `文字一两句说不太全，我先把一页简历发您看下技术栈和项目产出，感兴趣的话咱们约个 10 分钟语音细聊下业务需求？`,
       },
     ];
   } else if (intent === "NO_REPLY_YET") {
     templates = [
       {
         key: "nudge_value",
-        label: "补充亮点温和追问",
+        label: "补一句匹配点温和跟进",
         tag: "二次触达",
-        text: `您好，补充一句：我过往${hl.highlightPhrase}，涉及 ${hl.coreSkills}，看到贵司「${roleName}」非常契合，如果方便可以发您简历看看~`,
+        text: `您好，补充一句：我平时主要做${hl.spokenStrength}，看到贵司在招「${roleName}」挺对口的，您方便的时候回复我一下，我把简历发您看看~`,
       },
       {
         key: "nudge_probe",
         label: "确认岗位是否还在招",
         tag: "简洁探测",
-        text: `您好，打扰了~ 请问贵司「${roleName}」目前还在看人吗？我这边擅长 ${hl.coreSkills}，希望能有机会沟通！`,
+        text: `您好打扰了~ 请问咱们「${roleName}」目前还在看人吗？我这边匹配 ${hl.coreSkills}，希望能有机会沟通！`,
       },
       {
         key: "nudge_img",
         label: "询问发图片简历",
         tag: "发简历前置",
-        text: `您好！如果您方便的话可以回复我一下，我把整理好的一页高清简历发给您评估下是否匹配「${roleName}」~`,
+        text: `您好！如果您方便的话可以回复我一下，我把整理好的一页高清简历发给您评估下是否合适~`,
       },
     ];
   } else {
     templates = [
       {
         key: "follow_img",
-        label: "顺势发简历+推进了解",
+        label: "自然接话+顺便了解业务",
         tag: "推荐",
-        text: `感谢回复！我目前重点匹配贵司「${roleName}」的 ${hl.coreSkills}，这边先把高清图片简历发您看看；也想了解下这个岗位的日常核心业务和工作制情况？`,
+        text: `谢谢回复！我平时主要做${hl.spokenStrength}，这边先把高清图片简历发您看看；顺便想了解下咱们这个岗位日常核心测哪块、是否双休呢？`,
       },
       {
         key: "follow_probe",
-        label: "探底工作制与岗位定位",
+        label: "探底工作制与岗位重点",
         tag: "防踩坑",
-        text: `您好！想进一步了解下贵司「${roleName}」：目前团队主要做哪块产品测试、日常是否双休以及技术栈侧重哪块呢？我过往主要负责 ${hl.coreSkills}。`,
+        text: `您好！想了解下咱们「${roleName}」日常主要偏功能/接口还是专项测试，工作制是不是双休呀？我这块过往主要负责 ${hl.coreSkills}。`,
       },
       {
         key: "follow_call",
         label: "直接约进一步沟通",
         tag: "积极推进",
-        text: `好的没问题，我对贵司这个方向很感兴趣！您看是先看看我简历，还是方便约个时间简短沟通几分钟了解下团队需求？`,
+        text: `好的没问题，我对贵司这个方向挺感兴趣的！您看先看下我简历，还是方便约几分钟简单语音对下岗位需求？`,
       },
     ];
   }
@@ -305,12 +466,14 @@ export async function generateContextualReplies({
   if (!isLlmConfigured(settings)) return base;
 
   const cleanMsgs = (Array.isArray(messages) ? messages : [])
-    .filter((m) => m && m.text && m.sender !== "SYSTEM")
+    .filter((m) => m && (m.text || m.imageUrl) && m.sender !== "SYSTEM")
     .slice(-10);
-  const threadText = cleanMsgs.map((m) => `${m.sender === "ME" ? "我" : "HR"}：${m.text}`).join("\n");
+  const threadText = cleanMsgs.map((m) => `${m.sender === "ME" ? "我" : "HR"}：${m.text || "[图片消息]"}`).join("\n");
   const endpoint = `${settings.llm_base_url.replace(/\/+$/, "")}/chat/completions`;
   const prompt = [
-    "你是 Boss直聘求职者的连续对话助手。请严格基于候选人真实简历（严禁编造工作年限、学校或未经历的公司），结合双方历史聊天记录和对方最新回复，输出 3 套不同策略的中文回复模板（每条 30-150 字，口吻自然真诚、不卑不亢）。",
+    "你是 Boss直聘求职者的连续对话助手。请用「说人话」的真实微信/Boss聊天口吻（简短口语化、每条 35-100 字），严格基于候选人真实简历，禁止使用简历条文腔（禁止出现 • 列表符号、禁止生硬堆叠长串专业名词）：",
+    "1) 严禁虚构或夸大！如果对方问的技术栈（例如 UI自动化/性能压测）在简历里没有写或做得少，必须如实承认做得少，说明自己主要做哪块、逻辑相通可快速上手，或顺便反问岗位日常比例，禁止硬往不相关的经历上靠；",
+    "2) 如果聊天记录最后一条是我方自己发出的回复/图片，不要再重复回答上一轮问题，改为先建议等待或给轻量礼貌跟进话术；",
     `目标岗位：${job.company_name || ""} | ${job.job_title || ""} | 薪资:${job.salary_range || ""} | 要求:${job.experience_req || ""}`,
     `JD要点：${(job.jd_text || "").slice(0, 800)}`,
     `候选人真实履历：${resume.years_label || "1年经验"}；摘要：${(resume.summary || "").slice(0, 500)}；技能：${(resume.skills || []).join(", ")}`,

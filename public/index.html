@@ -625,10 +625,13 @@
               <textarea id="followup-reply-textarea" class="greet-textarea" rows="4" placeholder="点选上方任意模板，或自己输入回复..."></textarea>
             </label>
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-              <label class="check-label" for="followup-send-img-chk">
-                <input type="checkbox" id="followup-send-img-chk">
-                <span>顺带发出高清图片简历</span>
-              </label>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <label class="check-label" for="followup-send-img-chk">
+                  <input type="checkbox" id="followup-send-img-chk">
+                  <span>顺带发出高清图片简历</span>
+                </label>
+                <button type="button" id="followup-preview-img-btn" class="btn btn-ghost btn-xs">预览简历图</button>
+              </div>
               <div style="display:flex;gap:8px;flex-wrap:wrap;">
                 <button type="button" id="followup-copy-btn" class="btn btn-secondary btn-sm">📋 复制回复</button>
                 <button type="button" id="followup-send-btn" class="btn btn-boss btn-sm">💬 发送到 Boss</button>

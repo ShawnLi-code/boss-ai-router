@@ -684,6 +684,28 @@ test("连续对话智能回复建议：识别年限质疑/索要简历/邀约面
   });
   assert.equal(iv.intent, "INTERVIEW_INVITE");
   assert.equal(iv.templates.length, 3);
+
+  // 对方追问简历里没有重点写的技术栈（如 UI自动化多久），应坦诚过渡而不硬套“实战很多”或带项目列表符号
+  const skillGap = analyzeConversationAndSuggestReplies({
+    job,
+    resume,
+    messages: [{ sender: "HR", text: "你 ui自动化做多久呀？" }],
+  });
+  assert.equal(skillGap.intent, "SKILL_GAP_HONEST");
+  assert.ok(!skillGap.templates[0].text.includes("实战比较多"));
+  assert.ok(!skillGap.templates[0].text.includes("•"));
+
+  // 若我方最后一条已回复对方，应识别 WAITING_AFTER_MY_REPLY 而不是重复回答老问题
+  const alreadyReplied = analyzeConversationAndSuggestReplies({
+    job,
+    resume,
+    messages: [
+      { sender: "HR", text: "你 ui自动化做多久呀？" },
+      { sender: "ME", time: "09:26", text: "我主要做接口和AI测试，UI自动化用得少但AI生成脚本很快" },
+      { sender: "ME", kind: "image", text: "[图片消息]", imageUrl: "https://example.com/resume.png" },
+    ],
+  });
+  assert.equal(alreadyReplied.intent, "WAITING_AFTER_MY_REPLY");
 });
 
 test("批量投递话术风格选择：支持按 auto/direct/tech/bridge 精准取出对应话术", () => {

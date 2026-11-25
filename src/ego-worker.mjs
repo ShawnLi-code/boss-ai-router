@@ -1463,8 +1463,8 @@ try {
       if (cls.includes("item-system")) continue;
       const sender = cls.includes("item-myself") ? "ME" : "HR";
       const raw = (el.innerText || "").trim();
-      if (!raw || /与该职位竞争者PK情况|查看详细分析|你撤回了一条消息|正在加载/.test(raw)) continue;
-      const lines = raw.split(/\\n+/).map((x) => x.trim()).filter(Boolean);
+      if (/与该职位竞争者PK情况|查看详细分析|你撤回了一条消息|正在加载/.test(raw)) continue;
+      const lines = raw ? raw.split(/\\n+/).map((x) => x.trim()).filter(Boolean) : [];
       let time = "";
       if (lines[0] && /^(\\d{1,2}:\\d{2}|昨天|前天|\\d+月\\d+日)$/.test(lines[0])) {
         time = lines.shift();
@@ -1472,14 +1472,22 @@ try {
       if (lines[0] && /^(已读|送达|未读)$/.test(lines[0])) {
         lines.shift();
       }
+      const chatImgEl = el.querySelector("img.message-image, .message-image-content img, .msg-img img, .image-content img");
+      const imageUrl = chatImgEl?.getAttribute("src") || chatImgEl?.src || "";
       const cleanText = lines.join("\\n").trim();
-      if (!cleanText) continue;
-      messages.push({ sender, time, text: cleanText });
+      if (!cleanText && !imageUrl) continue;
+      messages.push({
+        sender,
+        time,
+        text: cleanText || "[图片消息]",
+        ...(imageUrl ? { kind: "image", imageUrl } : {}),
+      });
     }
     const imgWrap = document.querySelector(".btn-sendimg, [aria-label='发送图片']");
     const imgInp = imgWrap?.querySelector("input[type='file']");
     const imgCls = [imgWrap?.className || "", imgWrap?.parentElement?.className || ""].join(" ");
-    const imgTip = (imgWrap?.innerText || imgWrap?.getAttribute("title") || "").trim();
+    const imgTip = (imgWrap?.innerText || wrapTooltipFallback(imgWrap) || "").trim();
+    function wrapTooltipFallback(w) { return w?.getAttribute("title") || ""; }
     const canSendImage = Boolean(imgInp && !imgInp.disabled && !/unable|disable/i.test(imgCls) && !/回复后/.test(imgTip));
     return { messages, canSendImage };
   });

@@ -130,6 +130,7 @@ const els = {
   followupReplyLen: document.getElementById("followup-reply-len"),
   followupReplyTextarea: document.getElementById("followup-reply-textarea"),
   followupSendImgChk: document.getElementById("followup-send-img-chk"),
+  followupPreviewImgBtn: document.getElementById("followup-preview-img-btn"),
   followupCopyBtn: document.getElementById("followup-copy-btn"),
   followupSendBtn: document.getElementById("followup-send-btn"),
   btnToggleBatch: document.getElementById("btn-toggle-batch"),
@@ -2263,13 +2264,38 @@ function renderFollowupModalBody() {
     els.followupChatThread.innerHTML = `<div class="muted" style="text-align:center;margin:auto;">暂无本地缓存对话，点击右上角「🔄 拉取最新 Boss 对话」或在下方手动贴入 HR 回复。</div>`;
   } else {
     els.followupChatThread.innerHTML = msgs
-      .map((m) => `
-        <div class="chat-bubble ${m.sender === "ME" ? "chat-bubble-me" : "chat-bubble-hr"}">
-          <div class="chat-bubble-meta">${m.sender === "ME" ? "我" : "HR"}${m.time ? ` · ${esc(m.time)}` : ""}</div>
-          <div>${esc(m.text)}</div>
-        </div>
-      `)
+      .map((m) => {
+        const isImg = Boolean(m.imageUrl || m.kind === "image" || m.text === "[图片消息]" || m.text === "[图片简历]");
+        const resumeUrl = hasImgAsset ? state.data.resume_image.url : "";
+        const primaryImgSrc = m.imageUrl || (m.sender === "ME" ? resumeUrl : "");
+        const fallbackAttr = (m.sender === "ME" && resumeUrl && primaryImgSrc !== resumeUrl)
+          ? ` data-fallback="${esc(resumeUrl)}"`
+          : "";
+        const imgHtml = isImg && primaryImgSrc
+          ? `<div class="chat-bubble-img-wrap"><img class="chat-bubble-img" src="${esc(primaryImgSrc)}" referrerpolicy="no-referrer" alt="聊天图片"${fallbackAttr} data-preview-chat-img></div>`
+          : "";
+        const showText = m.text && !(isImg && primaryImgSrc && (m.text === "[图片消息]" || m.text === "[图片简历]"));
+        return `
+          <div class="chat-bubble ${m.sender === "ME" ? "chat-bubble-me" : "chat-bubble-hr"}">
+            <div class="chat-bubble-meta">${m.sender === "ME" ? "我" : "HR"}${m.time ? ` · ${esc(m.time)}` : ""}</div>
+            ${showText ? `<div>${esc(m.text)}</div>` : ""}${imgHtml}
+          </div>
+        `;
+      })
       .join("");
+    els.followupChatThread.querySelectorAll("[data-preview-chat-img]").forEach((img) => {
+      img.addEventListener("error", () => {
+        if (img.dataset.fallback) {
+          img.src = img.dataset.fallback;
+          img.removeAttribute("data-fallback");
+        }
+      });
+      img.addEventListener("click", () => {
+        if (!els.imagePreviewModal || !els.imagePreviewFull) return;
+        els.imagePreviewFull.src = img.currentSrc || img.src;
+        els.imagePreviewModal.showModal();
+      });
+    });
     els.followupChatThread.scrollTop = els.followupChatThread.scrollHeight;
   }
 
@@ -2302,6 +2328,7 @@ function renderFollowupModalBody() {
   }
 
   els.followupSendImgChk.disabled = !hasImgAsset;
+  if (els.followupPreviewImgBtn) els.followupPreviewImgBtn.hidden = !hasImgAsset;
   if (!hasImgAsset) els.followupSendImgChk.checked = false;
 }
 
@@ -2417,6 +2444,12 @@ els.followupCopyBtn?.addEventListener("click", async () => {
   await navigator.clipboard.writeText(txt);
   els.followupCopyBtn.textContent = "✅ 已复制";
   setTimeout(() => { els.followupCopyBtn.textContent = "📋 复制回复"; }, 1400);
+});
+
+els.followupPreviewImgBtn?.addEventListener("click", () => {
+  if (!state.data?.resume_image?.exists || !els.imagePreviewModal || !els.imagePreviewFull) return;
+  els.imagePreviewFull.src = state.data.resume_image.url;
+  els.imagePreviewModal.showModal();
 });
 
 els.followupSendBtn?.addEventListener("click", async () => {
