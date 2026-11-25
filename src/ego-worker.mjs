@@ -1101,11 +1101,17 @@ if (verifyState.unavailable) {
 await page.mouse.wheel(0, 220, { label: "review job before chat" }).catch(() => {});
 await page.waitForTimeout(randDelay(1000, 1800));
 
-// Boss 页面滚动后底部/吸顶栏会同时出现 2 个 .btn-startchat，先打唯一属性再点击，避免 ego-browser 报 ElementResolutionError
+// Boss 页面滚动后底部/吸顶栏会同时出现 2 个 .btn-startchat，仅筛选真正可见按钮并滚入视口再点击
 const taggedStartChat = await page.evaluate(() => {
   document.querySelectorAll("[data-ego-startchat]").forEach((el) => el.removeAttribute("data-ego-startchat"));
-  const btn = document.querySelector(".job-banner .btn-startchat, .info-primary .btn-startchat, .btn-startchat, .op-btn-chat");
+  const candidates = [...document.querySelectorAll(".job-banner .btn-startchat, .info-primary .btn-startchat, .btn-startchat, .op-btn-chat")];
+  const btn = candidates.find((el) => {
+    const s = getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    return s.display !== "none" && s.visibility !== "hidden" && r.width > 10 && r.height > 10;
+  }) || candidates[0];
   if (!btn) return "";
+  btn.scrollIntoView({ block: "center" });
   btn.setAttribute("data-ego-startchat", "1");
   return (btn.innerText || "").trim();
 }).catch(() => "");
@@ -1195,8 +1201,14 @@ async function trySendResumeImage(allowNavigateChat) {
     const canOpenChat = await page.evaluate(() => {
       if (!location.pathname.includes("/job_detail/")) return false;
       document.querySelectorAll("[data-ego-continuechat]").forEach((el) => el.removeAttribute("data-ego-continuechat"));
-      const btn = document.querySelector(".job-banner .btn-startchat, .btn-startchat, .op-btn-chat");
+      const candidates = [...document.querySelectorAll(".job-banner .btn-startchat, .info-primary .btn-startchat, .btn-startchat, .op-btn-chat")];
+      const btn = candidates.find((el) => {
+        const s = getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        return s.display !== "none" && s.visibility !== "hidden" && r.width > 10 && r.height > 10;
+      }) || candidates[0];
       if (!btn || !(btn.innerText || "").includes("继续沟通")) return false;
+      btn.scrollIntoView({ block: "center" });
       btn.setAttribute("data-ego-continuechat", "1");
       return true;
     }).catch(() => false);
