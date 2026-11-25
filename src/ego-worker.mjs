@@ -1145,7 +1145,9 @@ let textSent = alreadyContactedOnBoss;
 let imageSent = false;
 let imageBlockedReason = "";
 
-if (hasInput && shouldSendText) {
+async function trySendTextGreeting() {
+  const activeInput = await page.waitForSelector(inputSelector, { state: "visible", timeout: 6000 }).then(() => true).catch(() => false);
+  if (!activeInput) return false;
   await page.click(inputSelector, { label: "focus chat input" });
   await page.waitForTimeout(450);
   await page.fill(inputSelector, ${JSON.stringify(greetingText)}).catch(async () => {
@@ -1170,6 +1172,7 @@ if (hasInput && shouldSendText) {
     textSent = true;
     await page.waitForTimeout(randDelay(1400, 2200));
   }
+  return true;
 }
 
 async function inspectChatImgBtn() {
@@ -1187,24 +1190,25 @@ async function inspectChatImgBtn() {
   });
 }
 
-if (shouldSendImg) {
-  const canOpenChat = await page.evaluate(() => {
-    if (!location.pathname.includes("/job_detail/")) return false;
-    document.querySelectorAll("[data-ego-continuechat]").forEach((el) => el.removeAttribute("data-ego-continuechat"));
-    const btn = document.querySelector(".job-banner .btn-startchat, .btn-startchat, .op-btn-chat");
-    if (!btn || !(btn.innerText || "").includes("继续沟通")) return false;
-    btn.setAttribute("data-ego-continuechat", "1");
-    return true;
-  }).catch(() => false);
-  if (canOpenChat) {
-    await page.click("[data-ego-continuechat='1']", { label: "enter full chat for image" }).catch(() => {});
-    await page.waitForTimeout(randDelay(1800, 2500));
+async function trySendResumeImage(allowNavigateChat) {
+  if (allowNavigateChat) {
+    const canOpenChat = await page.evaluate(() => {
+      if (!location.pathname.includes("/job_detail/")) return false;
+      document.querySelectorAll("[data-ego-continuechat]").forEach((el) => el.removeAttribute("data-ego-continuechat"));
+      const btn = document.querySelector(".job-banner .btn-startchat, .btn-startchat, .op-btn-chat");
+      if (!btn || !(btn.innerText || "").includes("继续沟通")) return false;
+      btn.setAttribute("data-ego-continuechat", "1");
+      return true;
+    }).catch(() => false);
+    if (canOpenChat) {
+      await page.click("[data-ego-continuechat='1']", { label: "enter full chat for image" }).catch(() => {});
+      await page.waitForTimeout(randDelay(1800, 2500));
+    }
   }
 
   let imgBtnState = await inspectChatImgBtn();
 
-  // 岗位详情页点「立即沟通」仅弹出小输入框（无发图工具栏）；发完文字后自动进入 /web/geek/chat 选中对应会话即可发图
-  if (!imgBtnState.found && (textSent || onlySendImage || alreadyContactedOnBoss)) {
+  if (!imgBtnState.found && allowNavigateChat) {
     await page.goto("https://www.zhipin.com/web/geek/chat", { waitUntil: "domcontentloaded", timeout: 25000 }).catch(() => {});
     await page.waitForSelector(".user-list .friend-content, .chat-user .friend-content, li.friend-content", { timeout: 10000 }).catch(() => {});
     await page.waitForTimeout(randDelay(1000, 1600));
@@ -1245,7 +1249,6 @@ if (shouldSendImg) {
     await page.setInputFiles("input[data-ego-chat-img='1']", [imgFilePath]);
     await page.waitForTimeout(1600);
 
-    // 部分版本上传图片后会弹出确认框（发送 / 确定）或直接发出，检查是否存在确认按钮或拦截提示
     const afterSet = await page.evaluate((doConfirm) => {
       const toastTxt = [...document.querySelectorAll(".toast, [class*='toast'], .boss-popup__content, .dialog-wrap")]
         .filter((el) => getComputedStyle(el).display !== "none" && el.offsetHeight > 5)
@@ -1279,9 +1282,23 @@ if (shouldSendImg) {
       await page.waitForTimeout(1800);
       if (shouldAutoSend) imageSent = true;
     }
-  } else {
+  } else if (imgBtnState.found && !imgBtnState.enabled) {
+    imageBlockedReason = imgBtnState.reason || "需对方回复后才可发图";
+  } else if (allowNavigateChat) {
     imageBlockedReason = imgBtnState.reason || "需对方回复后才可发图";
   }
+  return imgBtnState;
+}
+
+// 调整发送顺序：优先尝试图片先发、文字后发；若在职位详情页首次点击「立即沟通」仅弹出文字框，则先建连再进聊天框发图
+if (shouldSendImg) {
+  await trySendResumeImage(Boolean(onlySendImage || alreadyContactedOnBoss || !shouldSendText));
+}
+if (shouldSendText) {
+  await trySendTextGreeting();
+}
+if (shouldSendImg && !imageSent && textSent && !imageBlockedReason) {
+  await trySendResumeImage(true);
 }
 
 if (alreadyContactedOnBoss) {
@@ -1794,20 +1811,7 @@ try {
   let imageSent = false;
   let imageBlockedReason = "";
 
-  if (hasInput && replyText) {
-    await page.click(inputSelector, { label: "focus reply input" });
-    await page.waitForTimeout(400);
-    await page.fill(inputSelector, replyText).catch(async () => {
-      await page.keyboard.paste(replyText);
-    });
-    await page.waitForTimeout(randDelay(650, 1100));
-    await page.click("button.btn-send, .btn-send", { label: "click send reply" }).catch(async () => {
-      await page.press(inputSelector, "Enter");
-    });
-    textSent = true;
-    await page.waitForTimeout(randDelay(1200, 1900));
-  }
-
+  // 调整为：图片先发，文字后发
   if (${JSON.stringify(hasImage)}) {
     const imgBtnState = await page.evaluate(() => {
       const wrap = document.querySelector(".btn-sendimg, [aria-label='发送图片']");
@@ -1860,9 +1864,34 @@ try {
     }
   }
 
+  if (hasInput && replyText) {
+    await page.click(inputSelector, { label: "focus reply input" });
+    await page.waitForTimeout(400);
+    await page.fill(inputSelector, replyText).catch(async () => {
+      await page.keyboard.paste(replyText);
+    });
+    await page.waitForTimeout(randDelay(650, 1100));
+    const hasReplySendBtn = await page.evaluate(() => {
+      document.querySelectorAll("[data-ego-reply-send]").forEach((el) => el.removeAttribute("data-ego-reply-send"));
+      const btn = document.querySelector(".chat-conversation button.btn-send, button.btn-send, .btn-send");
+      if (!btn) return false;
+      btn.setAttribute("data-ego-reply-send", "1");
+      return true;
+    }).catch(() => false);
+    if (hasReplySendBtn) {
+      await page.click("[data-ego-reply-send='1']", { label: "click send reply" }).catch(async () => {
+        await page.press(inputSelector, "Enter");
+      });
+    } else {
+      await page.press(inputSelector, "Enter");
+    }
+    textSent = true;
+    await page.waitForTimeout(randDelay(1200, 1900));
+  }
+
   await task.finish({ keep: [] });
   const msg = textSent && imageSent
-    ? "✅ 已发送回复并顺带发出高清图片简历！"
+    ? "✅ 已按「图片先发 + 文字后发」发出高清图片简历与回复！"
     : textSent
       ? (\`\${imageBlockedReason ? "✅ 已发送回复（图片未发出：" + imageBlockedReason + "）" : "✅ 已成功发送跟进回复！"}\`)
       : imageSent
