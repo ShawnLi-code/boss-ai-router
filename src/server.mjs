@@ -1611,19 +1611,62 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
         : (body.sendImageResume !== undefined ? Boolean(body.sendImageResume) : (settings.deliver_send_image !== "false"));
       const resumeMeta = getResumeImageMeta();
 
-      const deliveryRes = await prepareBossDelivery({
-        profileId,
-        jobUrl: job.job_url,
-        companyName: job.company_name,
-        jobTitle: job.job_title,
-        greetingText,
-        autoSend,
-        sendImageResume,
-        imagePath: resumeMeta.exists ? resumeMeta.filePath : "",
-        onlySendImage,
-        allowAlreadyContacted: Boolean(body.forceRepeat),
-        onLog: (m) => logEvent(m),
-      });
+      let deliveryRes;
+      try {
+        deliveryRes = await prepareBossDelivery({
+          profileId,
+          jobUrl: job.job_url,
+          companyName: job.company_name,
+          jobTitle: job.job_title,
+          greetingText,
+          autoSend,
+          sendImageResume,
+          imagePath: resumeMeta.exists ? resumeMeta.filePath : "",
+          onlySendImage,
+          allowAlreadyContacted: Boolean(body.forceRepeat),
+          onLog: (m) => logEvent(m),
+        });
+      } catch (deliverErr) {
+        addDeliveryLog({
+          job_id: job.id,
+          company_name: job.company_name,
+          job_title: job.job_title,
+          track_key: trackKey,
+          profile_id: profileId,
+          action: onlySendImage ? "SEND_IMAGE_ONLY" : (autoSend ? "AUTO_SEND" : "PREFILL_HANDOFF"),
+          greeting_text: onlySendImage ? "" : greetingText,
+          text_sent: false,
+          image_sent: false,
+          image_status: (job.tailored_resume || {}).image_delivery || "NONE",
+          status: "FAILED",
+          detail: String(deliverErr?.message || "投递执行异常").slice(0, 220),
+        });
+        throw deliverErr;
+      }
+
+      const prevTailored = job.tailored_resume || {};
+      if (deliveryRes.status === "JOB_UNAVAILABLE") {
+        addDeliveryLog({
+          job_id: job.id,
+          company_name: job.company_name,
+          job_title: job.job_title,
+          track_key: trackKey,
+          profile_id: profileId,
+          action: onlySendImage ? "SEND_IMAGE_ONLY" : (autoSend ? "AUTO_SEND" : "PREFILL_HANDOFF"),
+          greeting_text: onlySendImage ? "" : greetingText,
+          text_sent: false,
+          image_sent: false,
+          image_status: prevTailored.image_delivery || "NONE",
+          status: "FAILED",
+          detail: deliveryRes.message || "Boss 上该职位已下线或停止招聘",
+        });
+        return sendJson(res, 410, {
+          code: "JOB_UNAVAILABLE",
+          error: deliveryRes.message || "Boss 上该职位已下线或停止招聘，无法发起沟通",
+          delivery: deliveryRes,
+          state: buildStatePayload(),
+        });
+      }
 
       const isSent = deliveryRes.status === "SENT"
         || deliveryRes.status === "SENT_WITH_IMAGE"
@@ -1636,7 +1679,6 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
           ? "PREPARED"
           : "VERIFICATION";
 
-      const prevTailored = job.tailored_resume || {};
       const nextImageDelivery = deliveryRes.imageSent
         ? "SENT"
         : (deliveryRes.status === "SENT_TEXT_PENDING_IMAGE" || (deliveryRes.status === "ALREADY_CONTACTED_ON_BOSS" && sendImageResume))

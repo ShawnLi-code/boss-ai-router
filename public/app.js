@@ -91,6 +91,7 @@ const els = {
   cntSalaryIdeal: document.getElementById("cnt-salary-ideal"),
   cntContacted: document.getElementById("cnt-contacted"),
   cntFiltered: document.getElementById("cnt-filtered"),
+  cntDeliveryLogs: document.getElementById("cnt-delivery-logs"),
   btnPurgeFiltered: document.getElementById("btn-purge-filtered"),
   jobSearchInput: document.getElementById("job-search-input"),
   jobCommuteFilter: document.getElementById("job-commute-filter"),
@@ -426,6 +427,7 @@ function renderSidebarSummary() {
   els.cntSalaryIdeal.textContent = eligible.filter((j) => j.match?.salary_fit?.highlighted).length;
   els.cntContacted.textContent = contacted.length;
   els.cntFiltered.textContent = filtered.length;
+  if (els.cntDeliveryLogs) els.cntDeliveryLogs.textContent = getDeliveryAttemptLogs().length;
   els.btnPurgeFiltered.hidden = state.activeFilter !== "FILTERED" || filtered.length === 0;
 
   const t1 = tracks[0];
@@ -594,7 +596,81 @@ function getFilteredSortedJobs() {
   return list;
 }
 
+function getDeliveryAttemptLogs() {
+  return (state.data?.logs || []).filter(
+    (l) => l.action !== "BOSS_HISTORY_SYNC" && l.action !== "MANUAL_SYNC"
+  );
+}
+
+function renderDeliveryAttemptRows() {
+  let rows = getDeliveryAttemptLogs();
+  if (state.searchText) {
+    rows = rows.filter((l) => {
+      const hay = `${l.job_title || ""} ${l.company_name || ""} ${profileDisplayName(l.profile_id)} ${l.detail || ""} ${l.greeting_text || ""}`.toLowerCase();
+      return hay.includes(state.searchText);
+    });
+  }
+  if (rows.length === 0) {
+    els.jobListPane.innerHTML = `<div class="empty-state">暂无投递记录；发起打招呼或批量投递后，成功与失败明细都会记录在这里。</div>`;
+    return;
+  }
+
+  const jobMap = new Map((state.data?.jobs || []).map((j) => [j.id, j]));
+  els.jobListPane.innerHTML = rows
+    .map((l) => {
+      const selected = l.job_id && Number(l.job_id) === state.selectedJobId;
+      const linkedJob = jobMap.get(l.job_id);
+      const salary = l.salary_range || linkedJob?.salary_range || "";
+      const isFailed = l.status === "FAILED";
+      const isVerify = l.status === "VERIFICATION";
+      const isPrepared = l.status === "PREPARED";
+      let statusBadge = "";
+      if (isFailed) {
+        statusBadge = `<span class="zone-tag zone-RED">❌ 失败</span>`;
+      } else if (isVerify) {
+        statusBadge = `<span class="zone-tag zone-YELLOW">⚠️ 待验证</span>`;
+      } else if (isPrepared) {
+        statusBadge = `<span class="zone-tag zone-YELLOW">📝 已预填待发</span>`;
+      } else {
+        const txtPart = l.text_sent ? `<span class="meta-pill">📝 已发文字</span>` : "";
+        const imgPart = l.image_sent
+          ? `<span class="zone-tag zone-GREEN">🖼️ 已发图片</span>`
+          : `<span class="meta-pill">🖼️ 未发图片</span>`;
+        statusBadge = `${txtPart} ${imgPart}`.trim();
+      }
+      const noteLine = l.detail ? `<div class="job-row-sub" style="margin-top:4px;color:${isFailed ? "var(--red-fg)" : "var(--text-muted)"};">${esc(l.detail)}</div>` : "";
+      return `
+        <button type="button" class="job-row" role="option" aria-selected="${selected}" data-select-job="${esc(l.job_id || "")}">
+          <div class="job-row-top">
+            <span class="job-row-title">${esc(l.job_title || "未知岗位")}</span>
+            <span class="job-row-salary">${esc(salary || (isFailed ? "未发出" : ""))}</span>
+          </div>
+          <div class="job-row-sub">${esc(l.company_name || "未知公司")} · ${esc(profileDisplayName(l.profile_id))} · ${esc(fmtTime(l.created_at))}</div>
+          ${noteLine}
+          <div class="job-row-meta">
+            ${statusBadge}
+          </div>
+        </button>
+      `;
+    })
+    .join("");
+
+  els.jobListPane.querySelectorAll("[data-select-job]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = Number(btn.dataset.selectJob);
+      if (!id) return;
+      state.selectedJobId = id;
+      renderJobList();
+      renderInspector(true);
+    });
+  });
+}
+
 function renderJobList() {
+  if (state.activeFilter === "DELIVERY_LOGS") {
+    renderDeliveryAttemptRows();
+    return;
+  }
   const jobs = getFilteredSortedJobs();
   if (jobs.length === 0) {
     els.jobListPane.innerHTML = `<div class="empty-state">当前分类下暂无岗位。</div>`;

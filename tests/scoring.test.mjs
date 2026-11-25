@@ -6,8 +6,9 @@ import { DEFAULT_TARGET_ROLES, evaluateJobEligibility, evaluateSalaryFit, factGu
 import { calculateBikePlusMetroMetrics } from "../src/commute.mjs";
 import fs from "node:fs";
 import path from "node:path";
+import vm from "node:vm";
 import { RESUME_ASSETS_DIR, addDeliveryLog, db, getCompanyDeliveryHistory, getJob, getResumeImageMeta, getScrapeTelemetry, listDeliveryLogs, listKnownExternalIds, listPatrolRuns, normalizeCompanyRoot, pickBestMatchedJobForChat, recordPatrolRun, saveResumeImageMeta, updateJobRouting, upsertJob } from "../src/db.mjs";
-import { buildBossSearchUrl, isBossVerificationUrl } from "../src/ego-worker.mjs";
+import { buildBossDeliveryScript, buildBossSearchUrl, detectBossUnavailableState, extractBossEncryptJobId, isBossVerificationUrl } from "../src/ego-worker.mjs";
 import { compareSemver } from "../src/updater.mjs";
 import { analyzeConversationAndSuggestReplies } from "../src/reply-advisor.mjs";
 
@@ -736,6 +737,63 @@ test("聊天会话匹配：同公司多岗位只匹配唯一最佳岗位，不�
 
   const pickedExisting = pickBestMatchedJobForChat([j1, j2], [{ job_id: 101, profile_id: "Profile 2", status: "DELIVERED" }], { company_name: "软通动力", job_title: "大模型推理优化" }, "Profile 2");
   assert.equal(pickedExisting?.id, 101);
+});
+
+test("投递脚本构建与下线职位检测：避免 onlySendImage ReferenceError，进入聊天页发图，并记录失败日志不误耗额度", () => {
+  assert.equal(detectBossUnavailableState({ title: "您访问的页面不存在-BOSS直聘", bodyText: "Oops! 您访问的页面不存在～", pathname: "/job_detail/abc.html", hasChatButton: false }), true);
+  assert.equal(detectBossUnavailableState({ title: "测试工程师", bodyText: "职位职责...", pathname: "/job_detail/abc.html", hasChatButton: true }), false);
+  assert.equal(detectBossUnavailableState({ title: "搜索职位", bodyText: "", pathname: "/web/geek/jobs", hasChatButton: false }), false);
+  assert.equal(extractBossEncryptJobId("https://www.zhipin.com/job_detail/be30b7cc7d40723b0nF_3dm9FlJQ.html?ka=search"), "be30b7cc7d40723b0nF_3dm9FlJQ");
+
+  const script = buildBossDeliveryScript({
+    profileId: "Profile 2",
+    jobUrl: "https://www.zhipin.com/job_detail/be30b7cc7d40723b0nF_3dm9FlJQ.html",
+    companyName: "阿里巴巴",
+    jobTitle: "AI模型评测",
+    greetingText: "您好，对贵司AI评测岗非常感兴趣！",
+    autoSend: true,
+    sendImageResume: true,
+    imagePath: "",
+    onlySendImage: false,
+  });
+  assert.match(script, /const onlySendImage = false;/);
+  assert.match(script, /JOB_UNAVAILABLE/);
+  assert.match(script, /web\/geek\/chat/);
+  assert.doesNotThrow(() => new vm.Script(`async function _check() {\n${script}\n}`));
+
+  const { id: failJobId } = upsertJob({
+    external_id: "test-fail-log-001",
+    job_url: "https://www.zhipin.com/job_detail/testfaillog.html",
+    job_title: "离线测试工程师",
+    company_name: "示例已下线科技公司",
+    salary_range: "9-10K",
+    experience_req: "1-3年",
+  });
+  let logId = null;
+  try {
+    const insertedLog = addDeliveryLog({
+      job_id: failJobId,
+      company_name: "示例已下线科技公司",
+      job_title: "离线测试工程师",
+      track_key: "B",
+      profile_id: "Profile 2",
+      action: "AUTO_SEND",
+      greeting_text: "您好",
+      text_sent: false,
+      image_sent: false,
+      image_status: "NONE",
+      status: "FAILED",
+      detail: "Boss 上该职位已下线或停止招聘，无法发起沟通",
+    });
+    logId = insertedLog.id;
+    const logs = listDeliveryLogs(10);
+    const failedRow = logs.find((l) => l.job_id === failJobId && l.status === "FAILED");
+    assert.ok(failedRow);
+    assert.equal(getCompanyDeliveryHistory("示例已下线科技公司").length, 0);
+  } finally {
+    if (logId) db.prepare("DELETE FROM delivery_logs WHERE id = ?").run(logId);
+    db.prepare("DELETE FROM jobs WHERE id = ?").run(failJobId);
+  }
 });
 
 

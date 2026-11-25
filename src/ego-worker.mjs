@@ -892,7 +892,21 @@ console.log("RESULT_JSON:" + JSON.stringify({
   }
 }
 
-export async function prepareBossDelivery({
+export function detectBossUnavailableState({ title = "", bodyText = "", pathname = "", hasChatButton = true } = {}) {
+  const cleanTitle = String(title || "");
+  const cleanBody = String(bodyText || "");
+  if (/页面不存在/.test(cleanTitle)) return true;
+  if (/您访问的页面不存在|职位已关闭|该职位已下线|停止招聘|职位不存在/.test(cleanBody)) return true;
+  if (!hasChatButton && /\/job_detail\//i.test(String(pathname || ""))) return true;
+  return false;
+}
+
+export function extractBossEncryptJobId(jobUrl = "") {
+  const m = String(jobUrl || "").match(/\/job_detail\/([^/.?]+)\.html/i);
+  return m ? m[1] : "";
+}
+
+export function buildBossDeliveryScript({
   profileId,
   jobUrl,
   companyName,
@@ -903,7 +917,6 @@ export async function prepareBossDelivery({
   imagePath = "",
   onlySendImage = false,
   allowAlreadyContacted = false,
-  onLog = () => {},
 }) {
   const targetUrl =
     jobUrl && /^https?:\/\//i.test(jobUrl)
@@ -911,11 +924,9 @@ export async function prepareBossDelivery({
       : `https://www.zhipin.com/web/geek/jobs?query=${encodeURIComponent(`${companyName} ${jobTitle}`.trim())}`;
   const hasImage = Boolean(sendImageResume && imagePath && fs.existsSync(imagePath));
   const normalizedImagePath = hasImage ? imagePath.replace(/\\/g, "/") : "";
+  const targetExternalId = extractBossEncryptJobId(targetUrl);
 
-  acquireLock(`打招呼「${companyName} · ${jobTitle}」(${profileId})`);
-  try {
-    onLog(`正在使用 ${profileId} 打开岗位/聊天框（${companyName} · ${jobTitle}）...`);
-    const code = `
+  return `
 const randDelay = (min, max) => min + Math.floor(Math.random() * (max - min + 1));
 const task = await taskSpace("boss-deliver-" + Date.now(), { profileId: ${JSON.stringify(profileId)} });
 const page = (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
@@ -925,12 +936,19 @@ await page.waitForLoadState("networkidle", { timeout: 12000 }).catch(() => {});
 await page.waitForTimeout(randDelay(2200, 3600));
 
 const verifyState = await page.evaluate(() => {
-  const body = (document.body?.innerText || "").slice(0, 700);
+  const title = document.title || "";
+  const body = (document.body?.innerText || "").slice(0, 900);
   const needVerify = /verify-slider|security-check|\\/security(?:\\/|$)|\\/web\\/user/i.test(location.pathname)
     || /请完成安全验证|拖动滑块|点击按钮进行验证|访问异常|账号异常|扫码登录/.test(body);
   const chatBtn = document.querySelector(".btn-startchat, .op-btn-chat");
+  const unavailable = !needVerify && (
+    /页面不存在/.test(title)
+    || /您访问的页面不存在|职位已关闭|该职位已下线|停止招聘|职位不存在/.test(body)
+    || (!chatBtn && /\\/job_detail\\//i.test(location.pathname))
+  );
   return {
     needVerify,
+    unavailable,
     url: location.href,
     chatBtnText: (chatBtn?.innerText || "").trim(),
   };
@@ -943,6 +961,17 @@ if (verifyState.needVerify) {
     taskSpaceId: task.spaceId,
     url: verifyState.url,
     message: "Boss直聘需要登录或安全验证，请在 Ego 中完成后再继续",
+  }));
+  process.exit(0);
+}
+
+if (verifyState.unavailable) {
+  await task.finish({ keep: [] });
+  console.log("RESULT_JSON:" + JSON.stringify({
+    status: "JOB_UNAVAILABLE",
+    taskSpaceId: task.spaceId,
+    url: verifyState.url,
+    message: "Boss 上该职位已下线或停止招聘，无法发起沟通",
   }));
   process.exit(0);
 }
@@ -973,12 +1002,14 @@ if (await page.evaluate(() => /verify-slider|security-check|\\/security(?:\\/|$)
 const inputSelector = "div.chat-input[contenteditable='true'], textarea.input-area, .edit-area [contenteditable='true'], .greet-boss-dialog textarea, .chat-conversation [contenteditable='true']";
 const hasInput = await page.waitForSelector(inputSelector, { state: "visible", timeout: 8000 }).then(() => true).catch(() => false);
 
+const onlySendImage = ${JSON.stringify(Boolean(onlySendImage))};
 const shouldAutoSend = ${JSON.stringify(Boolean(autoSend))};
 const allowAlreadyContacted = ${JSON.stringify(Boolean(allowAlreadyContacted))};
-const alreadyContactedOnBoss = Boolean(${JSON.stringify(!onlySendImage)} && !allowAlreadyContacted && verifyState.chatBtnText.includes("继续沟通"));
-const shouldSendText = Boolean(${JSON.stringify(Boolean(!onlySendImage && greetingText))} && !alreadyContactedOnBoss);
+const alreadyContactedOnBoss = Boolean(!onlySendImage && !allowAlreadyContacted && verifyState.chatBtnText.includes("继续沟通"));
+const shouldSendText = Boolean(${JSON.stringify(Boolean(greetingText))} && !onlySendImage && !alreadyContactedOnBoss);
 const shouldSendImg = ${JSON.stringify(Boolean(hasImage))};
 const imgFilePath = ${JSON.stringify(normalizedImagePath)};
+const targetChatMeta = ${JSON.stringify({ externalId: targetExternalId, companyName: String(companyName || ""), jobTitle: String(jobTitle || "") })};
 let textSent = alreadyContactedOnBoss;
 let imageSent = false;
 let imageBlockedReason = "";
@@ -999,19 +1030,8 @@ if (hasInput && shouldSendText) {
   }
 }
 
-if (shouldSendImg) {
-  const canOpenChat = await page.evaluate(() => {
-    if (!location.pathname.includes("/job_detail/")) return false;
-    const btn = document.querySelector(".btn-startchat, .op-btn-chat");
-    return Boolean(btn && (btn.innerText || "").includes("继续沟通"));
-  }).catch(() => false);
-  if (canOpenChat) {
-    await page.click(".btn-startchat, .op-btn-chat", { label: "enter full chat for image" }).catch(() => {});
-    await page.waitForTimeout(randDelay(2000, 2800));
-  }
-
-  // 检测 Boss 聊天框顶部的「发送图片」控件是否可用
-  const imgBtnState = await page.evaluate(() => {
+async function inspectChatImgBtn() {
+  return page.evaluate(() => {
     const wrap = document.querySelector(".btn-sendimg, [aria-label='发送图片']");
     const inp = wrap?.querySelector("input[type='file']")
       || [...document.querySelectorAll(".chat-conversation input[type='file'], .chat-im input[type='file']")].find((i) => /image\\/gif|image\\/png/i.test(i.accept || ""));
@@ -1023,6 +1043,58 @@ if (shouldSendImg) {
     inp.setAttribute("data-ego-chat-img", "1");
     return { found: true, enabled: true };
   });
+}
+
+if (shouldSendImg) {
+  const canOpenChat = await page.evaluate(() => {
+    if (!location.pathname.includes("/job_detail/")) return false;
+    const btn = document.querySelector(".btn-startchat, .op-btn-chat");
+    return Boolean(btn && (btn.innerText || "").includes("继续沟通"));
+  }).catch(() => false);
+  if (canOpenChat) {
+    await page.click(".btn-startchat, .op-btn-chat", { label: "enter full chat for image" }).catch(() => {});
+    await page.waitForTimeout(randDelay(1800, 2500));
+  }
+
+  let imgBtnState = await inspectChatImgBtn();
+
+  // 岗位详情页点「立即沟通」仅弹出小输入框（无发图工具栏）；发完文字后自动进入 /web/geek/chat 选中对应会话即可发图
+  if (!imgBtnState.found && (textSent || onlySendImage || alreadyContactedOnBoss)) {
+    await page.goto("https://www.zhipin.com/web/geek/chat", { waitUntil: "domcontentloaded", timeout: 25000 }).catch(() => {});
+    await page.waitForSelector(".user-list .friend-content, .chat-user .friend-content, li.friend-content", { timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(randDelay(1000, 1600));
+
+    const pickIdx = await page.evaluate((meta) => {
+      const nodes = [...document.querySelectorAll(".user-list .friend-content, .chat-user .friend-content, li.friend-content, .geek-item, [class*='friend-item']")];
+      for (let i = 0; i < nodes.length; i++) {
+        const el = nodes[i];
+        const li = el.closest("li") || el.parentElement;
+        const vue = li?.__vue__ || el.__vue__ || {};
+        const src = vue._props?.source || vue.data || vue.source || vue.friend || {};
+        if (meta.externalId && src.encryptJobId === meta.externalId) return i;
+      }
+      for (let i = 0; i < nodes.length; i++) {
+        const el = nodes[i];
+        const li = el.closest("li") || el.parentElement;
+        const vue = li?.__vue__ || el.__vue__ || {};
+        const src = vue._props?.source || vue.data || vue.source || vue.friend || {};
+        const brand = String(src.brandName || src.companyName || el.innerText || "");
+        const pos = String(src.positionName || src.jobName || "");
+        if (meta.companyName && brand.includes(meta.companyName)) {
+          if (!meta.jobTitle || !pos || pos.includes(meta.jobTitle) || meta.jobTitle.includes(pos)) return i;
+        }
+      }
+      return -1;
+    }, targetChatMeta).catch(() => -1);
+
+    if (pickIdx >= 0) {
+      await page.click(".user-list .friend-content >> nth=" + pickIdx, { label: "select chat thread for resume image" }).catch(() => {});
+      await page.waitForTimeout(randDelay(1400, 2000));
+      imgBtnState = await inspectChatImgBtn();
+    } else {
+      imgBtnState = { found: false, reason: "聊天列表暂未找到该岗位会话，可在沟通记录点「补发图片简历」" };
+    }
+  }
 
   if (imgBtnState.found && imgBtnState.enabled) {
     await page.setInputFiles("input[data-ego-chat-img='1']", [imgFilePath]);
@@ -1130,6 +1202,14 @@ console.log("RESULT_JSON:" + JSON.stringify({
       : "已打开岗位沟通页，请在 Ego 页面中确认后发送",
 }));
 `;
+}
+
+export async function prepareBossDelivery(opts) {
+  const { profileId, companyName, jobTitle, onLog = () => {} } = opts;
+  acquireLock(`打招呼「${companyName} · ${jobTitle}」(${profileId})`);
+  try {
+    onLog(`正在使用 ${profileId} 打开岗位/聊天框（${companyName} · ${jobTitle}）...`);
+    const code = buildBossDeliveryScript(opts);
     const { combined } = await runEgoScript("prepare-delivery", code, 95_000);
     const res = parseMarkedJson(combined);
     onLog(`📨 ${res.message}`);
