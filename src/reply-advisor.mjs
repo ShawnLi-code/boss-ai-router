@@ -1,3 +1,4 @@
+import { DEFAULT_FOLLOWUP_PROMPT } from "./db.mjs";
 import { isLlmConfigured } from "./llm.mjs";
 
 const TECH_TOPIC_RULES = [
@@ -463,29 +464,58 @@ export async function generateContextualReplies({
   settings = {},
 } = {}) {
   const base = analyzeConversationAndSuggestReplies({ job, resume, messages, customHint, settings });
-  if (!isLlmConfigured(settings)) return base;
+  if (!isLlmConfigured(settings)) {
+    return {
+      ...base,
+      used_llm: false,
+      llm_notice: "尚未填写 AI API Key：当前先展示本地参考。去「巡检与账号设置」填好 Key 并保存后，即可由 DeepSeek V4.1 Flash Fast 结合你的真实经历生成口语化回复。",
+    };
+  }
 
   const cleanMsgs = (Array.isArray(messages) ? messages : [])
     .filter((m) => m && (m.text || m.imageUrl) && m.sender !== "SYSTEM")
-    .slice(-10);
-  const threadText = cleanMsgs.map((m) => `${m.sender === "ME" ? "我" : "HR"}：${m.text || "[图片消息]"}`).join("\n");
+    .slice(-12);
+  const threadText = cleanMsgs.map((m) => {
+    const body = m.kind === "image" || /^\[图片(?:消息|简历)?\]$/.test(String(m.text || "").trim())
+      ? (m.sender === "ME" ? "[已发出高清图片简历]" : "[图片消息]")
+      : m.text;
+    return `${m.sender === "ME" ? "我" : "HR"}${m.time ? `(${m.time})` : ""}：${body}`;
+  }).join("\n");
+
+  const expText = (Array.isArray(resume.experiences) ? resume.experiences : [])
+    .map((e) => `${e.company || ""}｜${e.role || ""}｜${e.period || ""}\n${cleanResumeText(e.content || "")}`)
+    .filter(Boolean)
+    .join("\n\n")
+    .slice(0, 1400);
+  const projText = (Array.isArray(resume.projects) ? resume.projects : [])
+    .map((p) => `${p.name || ""}${p.role ? `（${p.role}）` : ""}\n${cleanResumeText(p.content || p.description || "")}`)
+    .filter(Boolean)
+    .join("\n\n")
+    .slice(0, 1200);
+
+  const customRule = String(settings.followup_reply_prompt || DEFAULT_FOLLOWUP_PROMPT).trim();
   const endpoint = `${settings.llm_base_url.replace(/\/+$/, "")}/chat/completions`;
   const prompt = [
-    "你是 Boss直聘求职者的连续对话助手。请用「说人话」的真实微信/Boss聊天口吻（简短口语化、每条 35-100 字），严格基于候选人真实简历，禁止使用简历条文腔（禁止出现 • 列表符号、禁止生硬堆叠长串专业名词）：",
-    "1) 严禁虚构或夸大！如果对方问的技术栈（例如 UI自动化/性能压测）在简历里没有写或做得少，必须如实承认做得少，说明自己主要做哪块、逻辑相通可快速上手，或顺便反问岗位日常比例，禁止硬往不相关的经历上靠；",
-    "2) 如果聊天记录最后一条是我方自己发出的回复/图片，不要再重复回答上一轮问题，改为先建议等待或给轻量礼貌跟进话术；",
-    `目标岗位：${job.company_name || ""} | ${job.job_title || ""} | 薪资:${job.salary_range || ""} | 要求:${job.experience_req || ""}`,
-    `JD要点：${(job.jd_text || "").slice(0, 800)}`,
-    `候选人真实履历：${resume.years_label || "1年经验"}；摘要：${(resume.summary || "").slice(0, 500)}；技能：${(resume.skills || []).join(", ")}`,
-    `工作与项目：${JSON.stringify([...(resume.experiences || []), ...(resume.projects || [])]).slice(0, 1000)}`,
-    threadText ? `目前聊天记录：\n${threadText}` : "目前聊天记录：暂无（我方准备发起后续跟进）",
-    customHint ? `对方最新一句话/补充背景：${customHint}` : "",
+    customRule,
     "",
-    '只返回纯 JSON 对象：{"intent_label":"对方意图简述","strategy_tip":"1句回复策略建议","templates":[{"label":"方案名1","tag":"推荐","text":"回复内容1"},{"label":"方案名2","tag":"稳健","text":"回复内容2"},{"label":"方案名3","tag":"简洁","text":"回复内容3"}]}',
+    `【目标岗位】${job.company_name || ""} | ${job.job_title || ""} | 薪资:${job.salary_range || ""} | 经验要求:${job.experience_req || ""}`,
+    `【岗位 JD】\n${(job.jd_text || "").slice(0, 900)}`,
+    "",
+    `【候选人真实简历】`,
+    `- 真实经验标签：${resume.years_label || "1年经验"}`,
+    `- 个人简介：${cleanResumeText(resume.summary || "").slice(0, 500)}`,
+    `- 技能列表：${(resume.skills || []).join("、")}`,
+    expText ? `- 工作经历：\n${expText}` : "",
+    projText ? `- 项目经历：\n${projText}` : "",
+    "",
+    threadText ? `【目前双方真实对话记录（按时间顺序）】\n${threadText}` : "【目前双方真实对话记录】暂无（我方准备主动跟进）",
+    customHint ? `【补充的 HR 最新一句话】${customHint}` : "",
+    "",
+    '请只输出纯 JSON 对象（不要包含 Markdown 代码块）：{"intent_label":"对方当前意图（不超过18字）","strategy_tip":"1句实话建议（不超过60字）","templates":[{"label":"方案1标题","tag":"推荐","text":"回复正文1"},{"label":"方案2标题","tag":"稳健","text":"回复正文2"},{"label":"方案3标题","tag":"简洁","text":"回复正文3"}]}',
   ].filter(Boolean).join("\n");
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 16000);
+  const timer = setTimeout(() => controller.abort(), 18000);
   try {
     const res = await fetch(endpoint, {
       method: "POST",
@@ -498,32 +528,42 @@ export async function generateContextualReplies({
         model: settings.llm_model,
         temperature: 0.45,
         messages: [
-          { role: "system", content: "只输出合法 JSON，不要包含 Markdown 代码块。" },
+          { role: "system", content: "你是 Boss直聘求职者的连续对话助手。只输出合法 JSON 对象，不要包含 ```json 代码块。" },
           { role: "user", content: prompt },
         ],
       }),
     });
-    if (!res.ok) throw new Error(`LLM HTTP ${res.status}`);
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "");
+      throw new Error(`HTTP ${res.status}${errBody ? `: ${errBody.slice(0, 120)}` : ""}`);
+    }
     const data = await res.json();
     const raw = data?.choices?.[0]?.message?.content || "";
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("LLM未返回JSON");
+    if (!jsonMatch) throw new Error("模型未返回合法 JSON");
     const parsed = JSON.parse(jsonMatch[0]);
-    if (!Array.isArray(parsed.templates) || parsed.templates.length === 0) throw new Error("缺少templates");
+    if (!Array.isArray(parsed.templates) || parsed.templates.length === 0) throw new Error("模型返回缺少 templates");
     return {
       ...base,
       intent_label: parsed.intent_label || base.intent_label,
       strategy_tip: parsed.strategy_tip || base.strategy_tip,
       used_llm: true,
+      llm_model: settings.llm_model,
+      llm_error: "",
       templates: parsed.templates.slice(0, 3).map((t, idx) => ({
         key: `llm_${idx}`,
         label: String(t.label || `方案 ${idx + 1}`).slice(0, 16),
-        tag: String(t.tag || "AI建议").slice(0, 10),
+        tag: String(t.tag || "AI生成").slice(0, 10),
         text: String(t.text || "").trim(),
       })).filter((t) => t.text),
     };
-  } catch {
-    return base;
+  } catch (err) {
+    return {
+      ...base,
+      used_llm: false,
+      llm_error: String(err?.message || "大模型调用失败"),
+      llm_notice: `AI 调用失败（${String(err?.message || "未知错误")}），当前暂展示本地兜底参考。`,
+    };
   } finally {
     clearTimeout(timer);
   }

@@ -268,6 +268,16 @@ function seedDefaults() {
     );
   }
 
+  const defaultFollowupPrompt = [
+    "你正在帮求职者在 Boss 直聘上回复 HR 或技术面试官。请严格遵守以下原则：",
+    "1. 说人话、像真人在微信/Boss上打字聊天：语气自然平和、口语化、每条 35～95 字；严禁书面总结腔和套话（不要写“独立负责…落地”“统筹…生态”“闭环赋能”“三言两语聊不细”等 AI 味表达），禁止使用 • 列表符号或省略号截断。",
+    "2. 严格基于候选人【真实简历】回复，严禁硬往不相关的经历上靠：",
+    "   - 对方问到的方向如果简历里有真实做过，挑最贴合的 1 件事/工具用大白话讲清楚具体做了啥、做了多久，不夸大年限或职责；",
+    "   - 如果对方问的技术栈在简历里很少或没写（例如问 UI 自动化多久，但简历主做接口/AI 应用测试），必须坦诚说自己这块做得少、平时主要做哪块，再顺带提一句思路相通可快速补齐，并反问岗位日常工作占比，绝对不能硬吹“这块实战很多”。",
+    "3. 看懂对话上下文：如果最后一条已经是求职者自己发出的回复或图片简历，不要再重复回答上一个问题，改为提醒先等对方看消息，仅提供 3 条轻量跟进或确认岗位细节的备选。",
+    "4. 输出 3 套不同角度的回复：方案1 直奔主题对标真实经历；方案2 补充细节或反问确认岗位实际情况；方案3 简短口语版（30～55字）。",
+  ].join("\n");
+
   const defaultSettings = {
     search_query: "AI测试",
     search_city: "101280100",
@@ -279,9 +289,10 @@ function seedDefaults() {
     auto_web_search: "true",
     auto_check_update: "true",
     github_repo: "ShawnLi-code/boss-ai-router",
-    llm_base_url: "",
-    llm_model: "",
+    llm_base_url: "https://api.commandcode.ai/provider/v1",
+    llm_model: "deepseek/deepseek-v4.1-flash-fast",
     llm_api_key: "",
+    followup_reply_prompt: defaultFollowupPrompt,
     primary_resume_track: "A",
     scan_mode: "both",
     filter_exclude_intern: "true",
@@ -319,7 +330,28 @@ function seedDefaults() {
   for (const [k, v] of Object.entries(defaultSettings)) {
     upsertSetting.run(k, v, now());
   }
+
+  // 若旧库此前未配过模型接口（三项均为空），自动预填 Command Code GOAT + DeepSeek V4.1 Flash Fast
+  const llmRows = db.prepare("SELECT key, value FROM settings WHERE key IN ('llm_base_url', 'llm_model', 'llm_api_key', 'followup_reply_prompt')").all();
+  const llmMap = Object.fromEntries(llmRows.map((r) => [r.key, r.value]));
+  if (!llmMap.llm_base_url && !llmMap.llm_model && !llmMap.llm_api_key) {
+    db.prepare("UPDATE settings SET value = ?, updated_at = ? WHERE key = 'llm_base_url'").run(defaultSettings.llm_base_url, now());
+    db.prepare("UPDATE settings SET value = ?, updated_at = ? WHERE key = 'llm_model'").run(defaultSettings.llm_model, now());
+  }
+  if (!llmMap.followup_reply_prompt) {
+    db.prepare("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('followup_reply_prompt', ?, ?)").run(defaultFollowupPrompt, now());
+  }
 }
+
+export const DEFAULT_FOLLOWUP_PROMPT = [
+  "你正在帮求职者在 Boss 直聘上回复 HR 或技术面试官。请严格遵守以下原则：",
+  "1. 说人话、像真人在微信/Boss上打字聊天：语气自然平和、口语化、每条 35～95 字；严禁书面总结腔和套话（不要写“独立负责…落地”“统筹…生态”“闭环赋能”“三言两语聊不细”等 AI 味表达），禁止使用 • 列表符号或省略号截断。",
+  "2. 严格基于候选人【真实简历】回复，严禁硬往不相关的经历上靠：",
+  "   - 对方问到的方向如果简历里有真实做过，挑最贴合的 1 件事/工具用大白话讲清楚具体做了啥、做了多久，不夸大年限或职责；",
+  "   - 如果对方问的技术栈在简历里很少或没写（例如问 UI 自动化多久，但简历主做接口/AI 应用测试），必须坦诚说自己这块做得少、平时主要做哪块，再顺带提一句思路相通可快速补齐，并反问岗位日常工作占比，绝对不能硬吹“这块实战很多”。",
+  "3. 看懂对话上下文：如果最后一条已经是求职者自己发出的回复或图片简历，不要再重复回答上一个问题，改为提醒先等对方看消息，仅提供 3 条轻量跟进或确认岗位细节的备选。",
+  "4. 输出 3 套不同角度的回复：方案1 直奔主题对标真实经历；方案2 补充细节或反问确认岗位实际情况；方案3 简短口语版（30～55字）。",
+].join("\n");
 
 seedDefaults();
 

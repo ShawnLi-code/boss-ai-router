@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  DEFAULT_FOLLOWUP_PROMPT,
   PDF_DIR,
   PROJECT_ROOT,
   RESUME_ASSETS_DIR,
@@ -469,6 +470,7 @@ function buildStatePayload() {
     version: getCurrentVersion(),
     settings: maskedSettings,
     llmConfigured: isLlmConfigured(settings),
+    defaultFollowupPrompt: DEFAULT_FOLLOWUP_PROMPT,
     tracks,
     resumes: getResumes(),
     resume_image: getResumeImageMeta(),
@@ -666,6 +668,44 @@ const server = http.createServer(async (req, res) => {
         }
       }
       return sendJson(res, 200, { ok: true, state: buildStatePayload() });
+    }
+
+    if (req.method === "POST" && pathname === "/api/settings/test-llm") {
+      const body = await readBody(req).catch(() => ({}));
+      const saved = getSettings();
+      const baseUrl = String(body.llm_base_url || saved.llm_base_url || "").trim().replace(/\/+$/, "");
+      const model = String(body.llm_model || saved.llm_model || "").trim();
+      const rawKey = String(body.llm_api_key || "").trim();
+      const apiKey = rawKey && rawKey !== "******" ? rawKey : saved.llm_api_key;
+      if (!baseUrl || !model || !apiKey) {
+        return sendJson(res, 400, { error: "请先填写 Base URL、模型名称和 API Key" });
+      }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
+      try {
+        const resp = await fetch(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          signal: controller.signal,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 32,
+            messages: [{ role: "user", content: "请仅回复：OK" }],
+          }),
+        });
+        const text = await resp.text();
+        if (!resp.ok) {
+          return sendJson(res, 400, { error: `接口返回 HTTP ${resp.status}：${text.slice(0, 160)}` });
+        }
+        return sendJson(res, 200, { ok: true, message: `连接成功！模型「${model}」已可正常响应。` });
+      } catch (err) {
+        return sendJson(res, 400, { error: `连接失败：${err.message}` });
+      } finally {
+        clearTimeout(timer);
+      }
     }
 
     if (req.method === "POST" && pathname === "/api/tracks/swap") {
@@ -1336,9 +1376,10 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
             const nextStatus = ch.hr_replied ? "REPLIED" : "DELIVERED";
             const prevMsgs = Array.isArray(mj.chat_messages) ? [...mj.chat_messages] : [];
             const lastText = String(ch.last_msg || "").trim();
+            const isImgMsg = /^\[图片(?:消息|简历)?\]$/.test(lastText);
             const hasLastInThread = lastText && prevMsgs.some((m) => m.text === lastText);
             const nextMsgs = lastText && !hasLastInThread
-              ? [...prevMsgs, { sender: ch.hr_replied ? "HR" : "ME", time: "最新", text: lastText }]
+              ? [...prevMsgs, { sender: ch.hr_replied ? "HR" : "ME", time: "最新", text: lastText, ...(isImgMsg ? { kind: "image" } : {}) }]
               : prevMsgs;
 
             const unreadCnt = Number(ch.unread_count || 0);
@@ -1544,7 +1585,7 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
       });
 
       const resume = getResumeByTrack(trackKey) || getPrimaryResume();
-      const advice = analyzeConversationAndSuggestReplies({ job: updatedJob, resume, messages: prevMsgs, settings });
+      const advice = await generateContextualReplies({ job: updatedJob, resume, messages: prevMsgs, settings });
       return sendJson(res, 200, { ok: true, delivery: sendRes, messages: prevMsgs, advice, state: buildStatePayload() });
     }
 

@@ -439,8 +439,36 @@
                 </label>
               </div>
 
+              <div class="ai-settings-box" style="margin-top:14px;padding:12px;border:1px solid var(--border-line);border-radius:10px;background:var(--bg-canvas);">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                  <strong>🤖 AI 对话模型与提示词（Command Code GOAT / DeepSeek V4.1 Flash Fast）</strong>
+                  <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                    <button type="button" id="btn-test-llm" class="btn btn-secondary btn-xs">🔌 测试模型连通</button>
+                    <button type="button" id="btn-reset-prompt" class="btn btn-ghost btn-xs">↩️ 恢复默认提示词</button>
+                  </div>
+                </div>
+                <div class="form-grid">
+                  <label class="field">
+                    <span>AI Base URL</span>
+                    <input type="url" name="llm_base_url" placeholder="https://api.commandcode.ai/provider/v1">
+                  </label>
+                  <label class="field">
+                    <span>AI 模型名称</span>
+                    <input type="text" name="llm_model" placeholder="deepseek/deepseek-v4.1-flash-fast">
+                  </label>
+                  <label class="field">
+                    <span>AI API Key（仅存本机，填入保存即启用）</span>
+                    <input type="password" name="llm_api_key" placeholder="粘贴 Command Code API Key">
+                  </label>
+                </div>
+                <label class="field" style="margin-top:10px;">
+                  <span>连续沟通回复提示词（指导 AI 说人话、严禁硬靠不相关经历）</span>
+                  <textarea name="followup_reply_prompt" rows="6" style="font-size:12px;line-height:1.45;"></textarea>
+                </label>
+              </div>
+
               <details class="advanced-settings">
-                <summary>展开高级筛选规则、防封间隔与可选 AI 模型接口</summary>
+                <summary>展开高级筛选规则与防封间隔参数</summary>
                 <div class="form-grid" style="margin-top:12px;">
                   <label class="field">
                     <span>每词单次目标新增条数 (1-25)</span>
@@ -522,18 +550,6 @@
                   <label class="field">
                     <span>GitHub 更新仓库</span>
                     <input type="text" name="github_repo" placeholder="ShawnLi-code/boss-ai-router">
-                  </label>
-                  <label class="field">
-                    <span>AI Base URL（可选，增强话术）</span>
-                    <input type="url" name="llm_base_url" placeholder="https://api.deepseek.com/v1">
-                  </label>
-                  <label class="field">
-                    <span>AI 模型名称</span>
-                    <input type="text" name="llm_model" placeholder="deepseek-chat">
-                  </label>
-                  <label class="field">
-                    <span>AI API Key（仅存本机）</span>
-                    <input type="password" name="llm_api_key" placeholder="留空表示不修改">
                   </label>
                 </div>
               </details>

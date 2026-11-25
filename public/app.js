@@ -1886,9 +1886,12 @@ function renderSettings() {
   form.auto_web_search.value = settings.auto_web_search || "true";
   form.auto_check_update.value = settings.auto_check_update || "true";
   form.github_repo.value = settings.github_repo || "ShawnLi-code/boss-ai-router";
-  form.llm_base_url.value = settings.llm_base_url || "";
-  form.llm_model.value = settings.llm_model || "";
+  form.llm_base_url.value = settings.llm_base_url || "https://api.commandcode.ai/provider/v1";
+  form.llm_model.value = settings.llm_model || "deepseek/deepseek-v4.1-flash-fast";
   form.llm_api_key.value = settings.llm_api_key || "";
+  if (form.followup_reply_prompt) {
+    form.followup_reply_prompt.value = settings.followup_reply_prompt || state.data?.defaultFollowupPrompt || "";
+  }
   if (settings.min_hr_active && els.scrapeHrActive) els.scrapeHrActive.value = settings.min_hr_active;
 }
 
@@ -2265,7 +2268,9 @@ function renderFollowupModalBody() {
   } else {
     els.followupChatThread.innerHTML = msgs
       .map((m) => {
-        const isImg = Boolean(m.imageUrl || m.kind === "image" || m.text === "[图片消息]" || m.text === "[图片简历]");
+        const cleanBody = String(m.text || "").trim();
+        const isImgPlaceholder = /^\[图片(?:消息|简历)?\]$/.test(cleanBody);
+        const isImg = Boolean(m.imageUrl || m.kind === "image" || isImgPlaceholder);
         const resumeUrl = hasImgAsset ? state.data.resume_image.url : "";
         const primaryImgSrc = m.imageUrl || (m.sender === "ME" ? resumeUrl : "");
         const fallbackAttr = (m.sender === "ME" && resumeUrl && primaryImgSrc !== resumeUrl)
@@ -2273,17 +2278,22 @@ function renderFollowupModalBody() {
           : "";
         const imgHtml = isImg && primaryImgSrc
           ? `<div class="chat-bubble-img-wrap"><img class="chat-bubble-img" src="${esc(primaryImgSrc)}" referrerpolicy="no-referrer" alt="聊天图片"${fallbackAttr} data-preview-chat-img></div>`
-          : "";
-        const showText = m.text && !(isImg && primaryImgSrc && (m.text === "[图片消息]" || m.text === "[图片简历]"));
+          : isImg
+            ? `<div class="muted" style="font-size:12px;">🖼️ [聊天图片未加载，点击右上角「🔄 拉取最新 Boss 对话」查看原图]</div>`
+            : "";
+        const showText = cleanBody && !(isImg && isImgPlaceholder);
         return `
           <div class="chat-bubble ${m.sender === "ME" ? "chat-bubble-me" : "chat-bubble-hr"}">
             <div class="chat-bubble-meta">${m.sender === "ME" ? "我" : "HR"}${m.time ? ` · ${esc(m.time)}` : ""}</div>
-            ${showText ? `<div>${esc(m.text)}</div>` : ""}${imgHtml}
+            ${showText ? `<div>${esc(cleanBody)}</div>` : ""}${imgHtml}
           </div>
         `;
       })
       .join("");
     els.followupChatThread.querySelectorAll("[data-preview-chat-img]").forEach((img) => {
+      img.addEventListener("load", () => {
+        els.followupChatThread.scrollTop = els.followupChatThread.scrollHeight;
+      });
       img.addEventListener("error", () => {
         if (img.dataset.fallback) {
           img.src = img.dataset.fallback;
@@ -2301,8 +2311,18 @@ function renderFollowupModalBody() {
 
   const adv = state.followupAdvice;
   if (adv) {
-    els.followupIntentTitle.textContent = `🎯 识别对方意图：${adv.intent_label || "待分析"}${adv.used_llm ? "（AI 深度定制）" : ""}`;
-    els.followupStrategyTip.textContent = adv.strategy_tip || "";
+    const modelTag = adv.used_llm
+      ? `（${adv.llm_model || "DeepSeek AI"} 实时定制）`
+      : "（未启用 AI，暂展示兜底参考）";
+    els.followupIntentTitle.textContent = `🎯 识别对方意图：${adv.intent_label || "待分析"}${modelTag}`;
+    const noticeHtml = !adv.used_llm && adv.llm_notice
+      ? `<div style="margin-top:4px;color:var(--yellow-fg);">${esc(adv.llm_notice)} <button type="button" id="followup-goto-settings-btn" class="btn btn-ghost btn-xs" style="padding:1px 6px;">去填 API Key</button></div>`
+      : "";
+    els.followupStrategyTip.innerHTML = `${esc(adv.strategy_tip || "")}${noticeHtml}`;
+    document.getElementById("followup-goto-settings-btn")?.addEventListener("click", () => {
+      els.followupModal?.close();
+      switchView("settings");
+    });
     const curText = els.followupReplyTextarea.value.trim();
     els.followupTemplatesList.innerHTML = (adv.templates || [])
       .map((t, idx) => `
@@ -2822,6 +2842,37 @@ els.settingsForm.addEventListener("submit", async (e) => {
   await api("/api/settings", { method: "POST", body: JSON.stringify(rawObj) });
   await refreshState();
   els.liveLogLatest.textContent = "✅ 设置已保存生效";
+});
+
+document.getElementById("btn-reset-prompt")?.addEventListener("click", () => {
+  const defPrompt = state.data?.defaultFollowupPrompt || "";
+  if (els.settingsForm?.followup_reply_prompt && defPrompt) {
+    els.settingsForm.followup_reply_prompt.value = defPrompt;
+  }
+});
+
+document.getElementById("btn-test-llm")?.addEventListener("click", async () => {
+  const form = els.settingsForm;
+  const btn = document.getElementById("btn-test-llm");
+  if (!form || !btn) return;
+  btn.disabled = true;
+  btn.textContent = "测试中...";
+  try {
+    const res = await api("/api/settings/test-llm", {
+      method: "POST",
+      body: JSON.stringify({
+        llm_base_url: form.llm_base_url?.value || "",
+        llm_model: form.llm_model?.value || "",
+        llm_api_key: form.llm_api_key?.value || "",
+      }),
+    });
+    alert(res.message || "模型连接成功！");
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🔌 测试模型连通";
+  }
 });
 
 els.verifyDoneBtn.addEventListener("click", async () => {

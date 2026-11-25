@@ -7,10 +7,10 @@ import { calculateBikePlusMetroMetrics } from "../src/commute.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
-import { RESUME_ASSETS_DIR, addDeliveryLog, db, getCompanyDeliveryHistory, getJob, getResumeImageMeta, getScrapeTelemetry, listDeliveryLogs, listKnownExternalIds, listPatrolRuns, normalizeCompanyRoot, pickBestMatchedJobForChat, recordPatrolRun, saveResumeImageMeta, updateJobRouting, upsertJob } from "../src/db.mjs";
+import { DEFAULT_FOLLOWUP_PROMPT, RESUME_ASSETS_DIR, addDeliveryLog, db, getCompanyDeliveryHistory, getJob, getResumeImageMeta, getScrapeTelemetry, getSettings, listDeliveryLogs, listKnownExternalIds, listPatrolRuns, normalizeCompanyRoot, pickBestMatchedJobForChat, recordPatrolRun, saveResumeImageMeta, updateJobRouting, upsertJob } from "../src/db.mjs";
 import { buildBossDeliveryScript, buildBossSearchUrl, detectBossUnavailableState, extractBossEncryptJobId, isBossVerificationUrl } from "../src/ego-worker.mjs";
 import { compareSemver } from "../src/updater.mjs";
-import { analyzeConversationAndSuggestReplies } from "../src/reply-advisor.mjs";
+import { analyzeConversationAndSuggestReplies, generateContextualReplies } from "../src/reply-advisor.mjs";
 
 test("RED zone: 银行/金融 + 实锤第三方背调 + HRBP 应命中 A轨_真实日期版", () => {
   const job = {
@@ -706,6 +706,22 @@ test("连续对话智能回复建议：识别年限质疑/索要简历/邀约面
     ],
   });
   assert.equal(alreadyReplied.intent, "WAITING_AFTER_MY_REPLY");
+});
+
+test("Command Code GOAT DeepSeek 默认配置与真实口语化提示词就绪", async () => {
+  assert.ok(DEFAULT_FOLLOWUP_PROMPT.includes("说人话"));
+  assert.ok(DEFAULT_FOLLOWUP_PROMPT.includes("严禁硬往不相关的经历上靠"));
+  const s = getSettings();
+  assert.equal(s.llm_base_url, "https://api.commandcode.ai/provider/v1");
+  assert.equal(s.llm_model, "deepseek/deepseek-v4.1-flash-fast");
+  const noKeyAdvice = await generateContextualReplies({
+    job: { company_name: "测试", job_title: "测试" },
+    resume: { skills: ["接口测试"] },
+    messages: [{ sender: "HR", text: "你好" }],
+    settings: { ...s, llm_api_key: "" },
+  });
+  assert.equal(noKeyAdvice.used_llm, false);
+  assert.ok(noKeyAdvice.llm_notice.includes("API Key"));
 });
 
 test("批量投递话术风格选择：支持按 auto/direct/tech/bridge 精准取出对应话术", () => {
