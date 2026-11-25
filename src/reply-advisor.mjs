@@ -1,5 +1,5 @@
 import { DEFAULT_FOLLOWUP_PROMPT } from "./db.mjs";
-import { isLlmConfigured } from "./llm.mjs";
+import { buildChatCompletionsUrl, isLlmConfigured } from "./llm.mjs";
 
 const TECH_TOPIC_RULES = [
   { key: "ui_auto", label: "UI自动化", regex: /ui\s*自动化|ui自动化|selenium|playwright|cypress|puppeteer|appium|airtest/i },
@@ -494,7 +494,7 @@ export async function generateContextualReplies({
     .slice(0, 1200);
 
   const customRule = String(settings.followup_reply_prompt || DEFAULT_FOLLOWUP_PROMPT).trim();
-  const endpoint = `${settings.llm_base_url.replace(/\/+$/, "")}/chat/completions`;
+  const endpoint = buildChatCompletionsUrl(settings.llm_base_url);
   const prompt = [
     customRule,
     "",

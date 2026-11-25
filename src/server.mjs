@@ -48,7 +48,7 @@ import {
 import { evaluateJobRisk, shouldTriggerWebSearch } from "./scoring.mjs";
 import { DEFAULT_TARGET_ROLES, evaluateJobEligibility, matchResumeToJob, pickGreetingByTemplateStyle } from "./matcher.mjs";
 import { searchCompaniesBatchIntel, searchCompanyBackgroundIntel } from "./websearch.mjs";
-import { isLlmConfigured, refineMatchWithLlm } from "./llm.mjs";
+import { buildChatCompletionsUrl, isLlmConfigured, refineMatchWithLlm } from "./llm.mjs";
 import {
   checkGithubUpdate,
   downloadAndPrepareUpdate,
@@ -673,17 +673,18 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && pathname === "/api/settings/test-llm") {
       const body = await readBody(req).catch(() => ({}));
       const saved = getSettings();
-      const baseUrl = String(body.llm_base_url || saved.llm_base_url || "").trim().replace(/\/+$/, "");
+      const baseUrl = String(body.llm_base_url || saved.llm_base_url || "").trim();
+      const endpoint = buildChatCompletionsUrl(baseUrl);
       const model = String(body.llm_model || saved.llm_model || "").trim();
       const rawKey = String(body.llm_api_key || "").trim();
       const apiKey = rawKey && rawKey !== "******" ? rawKey : saved.llm_api_key;
-      if (!baseUrl || !model || !apiKey) {
+      if (!endpoint || !model || !apiKey) {
         return sendJson(res, 400, { error: "请先填写 Base URL、模型名称和 API Key" });
       }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 15000);
       try {
-        const resp = await fetch(`${baseUrl}/chat/completions`, {
+        const resp = await fetch(endpoint, {
           method: "POST",
           signal: controller.signal,
           headers: {

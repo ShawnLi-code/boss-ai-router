@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import { DEFAULT_FOLLOWUP_PROMPT, RESUME_ASSETS_DIR, addDeliveryLog, db, getCompanyDeliveryHistory, getJob, getResumeImageMeta, getScrapeTelemetry, getSettings, listDeliveryLogs, listKnownExternalIds, listPatrolRuns, normalizeCompanyRoot, pickBestMatchedJobForChat, recordPatrolRun, saveResumeImageMeta, updateJobRouting, upsertJob } from "../src/db.mjs";
+import { buildChatCompletionsUrl } from "../src/llm.mjs";
 import { buildBossDeliveryScript, buildBossSearchUrl, detectBossUnavailableState, extractBossEncryptJobId, isBossVerificationUrl } from "../src/ego-worker.mjs";
 import { compareSemver } from "../src/updater.mjs";
 import { analyzeConversationAndSuggestReplies, generateContextualReplies } from "../src/reply-advisor.mjs";
@@ -722,6 +723,8 @@ test("Command Code GOAT DeepSeek 默认配置与真实口语化提示词就绪",
   });
   assert.equal(noKeyAdvice.used_llm, false);
   assert.ok(noKeyAdvice.llm_notice.includes("API Key"));
+  assert.equal(buildChatCompletionsUrl("https://api.commandcode.ai/provider/v1/"), "https://api.commandcode.ai/provider/v1/chat/completions");
+  assert.equal(buildChatCompletionsUrl("https://api.commandcode.ai/provider/v1/chat/completions"), "https://api.commandcode.ai/provider/v1/chat/completions");
 });
 
 test("批量投递话术风格选择：支持按 auto/direct/tech/bridge 精准取出对应话术", () => {

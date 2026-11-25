@@ -4,6 +4,12 @@ export function isLlmConfigured(settings = getSettings()) {
   return Boolean(settings.llm_base_url && settings.llm_api_key && settings.llm_model);
 }
 
+export function buildChatCompletionsUrl(baseUrl = "") {
+  const clean = String(baseUrl || "").trim().replace(/\/+$/, "");
+  if (!clean) return "";
+  return clean.endsWith("/chat/completions") ? clean : `${clean}/chat/completions`;
+}
+
 /**
  * 可选：若用户在网页设置里配置了 OpenAI-compatible 接口（如 DeepSeek / OpenAI / 本地 Ollama），
  * 则用大模型进一步润色简历侧重点与 120 字以内专属打招呼话术；未配置时自动静默回退到本地规则引擎。
@@ -14,7 +20,7 @@ export async function refineMatchWithLlm(job, resume, baseResult) {
     return { ...baseResult, used_llm: false };
   }
 
-  const endpoint = `${settings.llm_base_url.replace(/\/+$/, "")}/chat/completions`;
+  const endpoint = buildChatCompletionsUrl(settings.llm_base_url);
   const prompt = [
     "你是 AI测试岗位求职与风控助手。请根据目标岗位与求职者对应轨道的简历素材，输出 JSON：",
     "1) tailored_summary: 结合 JD 关键词重构的个人优势摘要（保持原有工作年限与时间线真实性，禁止编造未经历的公司/时间）",

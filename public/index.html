@@ -441,9 +441,13 @@
 
               <div class="ai-settings-box" style="margin-top:14px;padding:12px;border:1px solid var(--border-line);border-radius:10px;background:var(--bg-canvas);">
                 <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
-                  <strong>🤖 AI 对话模型与提示词（Command Code GOAT / DeepSeek V4.1 Flash Fast）</strong>
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <strong>🤖 AI 对话模型与提示词（Command Code GOAT / DeepSeek V4.1 Flash Fast）</strong>
+                    <span id="llm-config-badge" class="zone-tag zone-RED">未保存 Key</span>
+                  </div>
                   <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                    <button type="button" id="btn-test-llm" class="btn btn-secondary btn-xs">🔌 测试模型连通</button>
+                    <button type="button" id="btn-test-llm" class="btn btn-primary btn-xs">🔌 测试并保存启用</button>
+                    <button type="button" id="btn-save-ai" class="btn btn-boss btn-xs">💾 保存 AI 配置</button>
                     <button type="button" id="btn-reset-prompt" class="btn btn-ghost btn-xs">↩️ 恢复默认提示词</button>
                   </div>
                 </div>

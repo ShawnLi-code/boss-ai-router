@@ -1886,11 +1886,20 @@ function renderSettings() {
   form.auto_web_search.value = settings.auto_web_search || "true";
   form.auto_check_update.value = settings.auto_check_update || "true";
   form.github_repo.value = settings.github_repo || "ShawnLi-code/boss-ai-router";
-  form.llm_base_url.value = settings.llm_base_url || "https://api.commandcode.ai/provider/v1";
-  form.llm_model.value = settings.llm_model || "deepseek/deepseek-v4.1-flash-fast";
-  form.llm_api_key.value = settings.llm_api_key || "";
-  if (form.followup_reply_prompt) {
-    form.followup_reply_prompt.value = settings.followup_reply_prompt || state.data?.defaultFollowupPrompt || "";
+  const setFieldIfClean = (el, val) => {
+    if (!el) return;
+    if (document.activeElement === el || el.dataset.dirty === "1") return;
+    el.value = val;
+  };
+  setFieldIfClean(form.llm_base_url, settings.llm_base_url || "https://api.commandcode.ai/provider/v1");
+  setFieldIfClean(form.llm_model, settings.llm_model || "deepseek/deepseek-v4.1-flash-fast");
+  setFieldIfClean(form.llm_api_key, settings.llm_api_key || "");
+  setFieldIfClean(form.followup_reply_prompt, settings.followup_reply_prompt || state.data?.defaultFollowupPrompt || "");
+  const badge = document.getElementById("llm-config-badge");
+  if (badge) {
+    const ready = Boolean(state.data?.llmConfigured);
+    badge.className = `zone-tag ${ready ? "zone-GREEN" : "zone-RED"}`;
+    badge.textContent = ready ? "✅ 已保存 Key · 默认 AI 生成回复" : "⚠️ 未保存 Key · 填入后点「测试并保存启用」";
   }
   if (settings.min_hr_active && els.scrapeHrActive) els.scrapeHrActive.value = settings.min_hr_active;
 }
@@ -2840,14 +2849,55 @@ els.settingsForm.addEventListener("submit", async (e) => {
   if (kwList.length > 0) rawObj.watchlist_keywords = JSON.stringify([...new Set(kwList)]);
   if (Number(rawObj.delay_min_ms) < 3000) rawObj.delay_min_ms = "3000";
   await api("/api/settings", { method: "POST", body: JSON.stringify(rawObj) });
+  ["llm_base_url", "llm_model", "llm_api_key", "followup_reply_prompt"].forEach((name) => {
+    if (els.settingsForm?.[name]) els.settingsForm[name].dataset.dirty = "0";
+  });
   await refreshState();
   els.liveLogLatest.textContent = "✅ 设置已保存生效";
+});
+
+["llm_base_url", "llm_model", "llm_api_key", "followup_reply_prompt"].forEach((name) => {
+  els.settingsForm?.[name]?.addEventListener("input", (e) => {
+    e.target.dataset.dirty = "1";
+  });
+});
+
+async function saveAiConfigOnly() {
+  const form = els.settingsForm;
+  if (!form) return;
+  const payload = {
+    llm_base_url: String(form.llm_base_url?.value || "").trim(),
+    llm_model: String(form.llm_model?.value || "").trim(),
+    llm_api_key: String(form.llm_api_key?.value || "").trim(),
+    followup_reply_prompt: String(form.followup_reply_prompt?.value || ""),
+  };
+  await api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
+  ["llm_base_url", "llm_model", "llm_api_key", "followup_reply_prompt"].forEach((name) => {
+    if (form[name]) form[name].dataset.dirty = "0";
+  });
+  await refreshState();
+  els.liveLogLatest.textContent = "✅ AI 模型配置与提示词已保存启用";
+}
+
+document.getElementById("btn-save-ai")?.addEventListener("click", async () => {
+  const btn = document.getElementById("btn-save-ai");
+  if (!btn) return;
+  btn.disabled = true;
+  try {
+    await saveAiConfigOnly();
+    alert("✅ AI 模型与提示词已保存！现在打开「连续沟通/回复模板」将默认使用大模型生成回复。");
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 document.getElementById("btn-reset-prompt")?.addEventListener("click", () => {
   const defPrompt = state.data?.defaultFollowupPrompt || "";
   if (els.settingsForm?.followup_reply_prompt && defPrompt) {
     els.settingsForm.followup_reply_prompt.value = defPrompt;
+    els.settingsForm.followup_reply_prompt.dataset.dirty = "1";
   }
 });
 
@@ -2861,17 +2911,18 @@ document.getElementById("btn-test-llm")?.addEventListener("click", async () => {
     const res = await api("/api/settings/test-llm", {
       method: "POST",
       body: JSON.stringify({
-        llm_base_url: form.llm_base_url?.value || "",
-        llm_model: form.llm_model?.value || "",
-        llm_api_key: form.llm_api_key?.value || "",
+        llm_base_url: String(form.llm_base_url?.value || "").trim(),
+        llm_model: String(form.llm_model?.value || "").trim(),
+        llm_api_key: String(form.llm_api_key?.value || "").trim(),
       }),
     });
-    alert(res.message || "模型连接成功！");
+    await saveAiConfigOnly();
+    alert(`✅ ${res.message || "模型连接成功！"} 已自动保存并设为默认回复引擎。`);
   } catch (err) {
     alert(err.message);
   } finally {
     btn.disabled = false;
-    btn.textContent = "🔌 测试模型连通";
+    btn.textContent = "🔌 测试并保存启用";
   }
 });
 
