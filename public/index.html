@@ -58,6 +58,7 @@
         <div id="worker-pill" class="engine-status">
           <span class="dot" aria-hidden="true"></span>
           <span id="worker-status-text">Ego 引擎空闲</span>
+          <button type="button" id="btn-cancel-task" class="btn btn-danger btn-xs" style="margin-left:auto;padding:2px 6px;" hidden>停止</button>
         </div>
         <div class="sidebar-footer-actions">
           <button type="button" id="btn-check-update" class="btn-text">检查更新</button>
@@ -95,6 +96,7 @@
         <header class="toolbar">
           <div class="toolbar-inputs">
             <button type="button" id="btn-patrol" class="btn btn-boss btn-sm">🚀 一键每日巡检</button>
+            <button type="button" id="btn-stop-patrol" class="btn btn-danger btn-sm" hidden>⏹️ 停止当前任务</button>
             <div class="quick-scrape-group">
               <input type="text" id="scrape-query" value="AI测试" placeholder="输入单个岗位词快采..." aria-label="单关键词快采" class="input-compact input-kw">
               <button type="button" id="btn-scrape" class="btn btn-secondary btn-sm">单词快采</button>

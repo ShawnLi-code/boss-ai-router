@@ -204,6 +204,10 @@ function setWorkerBusy(busy, label = "") {
   els.workerStatusText.textContent = busy ? (label || "Ego 执行中...") : "Ego 引擎空闲";
   if (els.btnScrape) els.btnScrape.disabled = busy;
   if (els.btnPatrol) els.btnPatrol.disabled = busy;
+  const stopTopBtn = document.getElementById("btn-stop-patrol");
+  const stopSideBtn = document.getElementById("btn-cancel-task");
+  if (stopTopBtn) stopTopBtn.hidden = !busy;
+  if (stopSideBtn) stopSideBtn.hidden = !busy;
 }
 
 function showVerifyBanner(payload) {
@@ -2926,6 +2930,28 @@ document.getElementById("btn-test-llm")?.addEventListener("click", async () => {
   }
 });
 
+async function cancelActiveTask() {
+  const stopTopBtn = document.getElementById("btn-stop-patrol");
+  const stopSideBtn = document.getElementById("btn-cancel-task");
+  if (stopTopBtn) stopTopBtn.disabled = true;
+  if (stopSideBtn) stopSideBtn.disabled = true;
+  try {
+    const res = await api("/api/tasks/cancel", { method: "POST", body: "{}" });
+    setWorkerBusy(false);
+    await refreshState();
+    const label = res.aborted?.abortedLabel;
+    els.liveLogLatest.textContent = label ? `⏹️ 已停止「${label}」并释放浏览器，现在可直接打招呼或拉取对话` : "⏹️ 已释放任务锁";
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    if (stopTopBtn) stopTopBtn.disabled = false;
+    if (stopSideBtn) stopSideBtn.disabled = false;
+  }
+}
+
+document.getElementById("btn-stop-patrol")?.addEventListener("click", cancelActiveTask);
+document.getElementById("btn-cancel-task")?.addEventListener("click", cancelActiveTask);
+
 els.verifyDoneBtn.addEventListener("click", async () => {
   if (state.pendingVerifySpaceId) {
     await api(`/api/ego/spaces/${state.pendingVerifySpaceId}/finish`, { method: "POST" }).catch(() => {});
@@ -2940,7 +2966,11 @@ const evt = new EventSource("/api/events");
 evt.addEventListener("log", (e) => { els.liveLogLatest.textContent = JSON.parse(e.data).message; });
 evt.addEventListener("patrol-progress", (e) => {
   const p = JSON.parse(e.data);
-  if (p.done) return;
+  if (p.done) {
+    refreshState();
+    return;
+  }
+  setWorkerBusy(true, `巡检 [${p.step}/${p.total}] ${p.profileId} · ${p.keyword}`);
   els.liveLogLatest.textContent = `巡检 [${p.step}/${p.total}] ${p.profileId} · ${p.keyword}（已累计 ${p.savedCount} 条）`;
 });
 evt.addEventListener("verification", (e) => showVerifyBanner(JSON.parse(e.data)));

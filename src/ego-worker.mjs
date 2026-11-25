@@ -9,15 +9,45 @@ const RUNS_DIR = path.join(DATA_DIR, "ego-runs");
 fs.mkdirSync(RUNS_DIR, { recursive: true });
 
 let activeLock = null;
+let activeChildProc = null;
+let activeTaskAborted = false;
 
 export function getActiveLock() {
   return activeLock;
 }
 
+function killChildTree(child) {
+  if (!child) return;
+  try {
+    if (process.platform === "win32" && child.pid) {
+      spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
+    }
+  } catch {}
+  try { child.kill("SIGTERM"); } catch {}
+}
+
+export function abortActiveEgoTask() {
+  const prev = activeLock?.label || "";
+  const hadChild = Boolean(activeChildProc);
+  activeTaskAborted = true;
+  if (activeChildProc) {
+    killChildTree(activeChildProc);
+    activeChildProc = null;
+  }
+  activeLock = null;
+  return { ok: true, hadLock: Boolean(prev || hadChild), abortedLabel: prev };
+}
+
 function acquireLock(label) {
   if (activeLock) {
-    throw new Error(`当前已有浏览器任务正在运行（${activeLock.label}），为防风控同一时间仅允许单任务串行执行`);
+    const ageMs = Date.now() - Date.parse(activeLock.startedAt || 0);
+    if (!activeChildProc && Number.isFinite(ageMs) && ageMs > 15_000) {
+      activeLock = null;
+    } else {
+      throw new Error(`当前已有浏览器任务正在运行（${activeLock.label}），为防风控同一时间仅允许单任务串行执行`);
+    }
   }
+  activeTaskAborted = false;
   activeLock = { label, startedAt: new Date().toISOString() };
 }
 
@@ -32,23 +62,29 @@ function runEgoScript(scriptName, code, timeoutMs = 180_000, { onLine = null } =
 
   if (!onLine) {
     return new Promise((resolve, reject) => {
-      execFile(
+      const child = execFile(
         "ego-browser",
         ["nodejs", "-e", entry],
         { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 },
         (err, stdout, stderr) => {
+          if (activeChildProc === child) activeChildProc = null;
           const combined = [stdout, stderr].filter(Boolean).join("\n");
+          if (activeTaskAborted) {
+            return reject(new Error("任务已被用户手动中止"));
+          }
           if (err) {
             return reject(new Error(`${err.message}\n${combined}`.trim()));
           }
           resolve({ stdout: stdout || "", stderr: stderr || "", combined });
         }
       );
+      activeChildProc = child;
     });
   }
 
   return new Promise((resolve, reject) => {
     const child = spawn("ego-browser", ["nodejs", "-e", entry], { windowsHide: true });
+    activeChildProc = child;
     let stdout = "";
     let stderr = "";
     let bufOut = "";
@@ -56,7 +92,7 @@ function runEgoScript(scriptName, code, timeoutMs = 180_000, { onLine = null } =
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      try { child.kill(); } catch {}
+      killChildTree(child);
     }, timeoutMs);
 
     const flushLines = (chunk, isErr) => {
@@ -80,15 +116,17 @@ function runEgoScript(scriptName, code, timeoutMs = 180_000, { onLine = null } =
     child.stderr?.on("data", (c) => flushLines(c, true));
     child.on("error", (err) => {
       clearTimeout(timer);
+      if (activeChildProc === child) activeChildProc = null;
       reject(err);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
+      if (activeChildProc === child) activeChildProc = null;
       if (bufOut) onLine(bufOut, "stdout");
       if (bufErr) onLine(bufErr, "stderr");
       const combined = [stdout, stderr].filter(Boolean).join("\n");
-      if (code === 0 || timedOut) {
-        resolve({ stdout, stderr, combined, timedOut, exitCode: code });
+      if (code === 0 || timedOut || activeTaskAborted) {
+        resolve({ stdout, stderr, combined, timedOut, aborted: activeTaskAborted, exitCode: code });
       } else {
         reject(new Error(`ego-browser exited with code ${code}\n${combined}`.trim()));
       }
@@ -812,7 +850,7 @@ console.log("RESULT_JSON:" + JSON.stringify({
 }));
 `;
     const streamedJobs = [];
-    const { combined, timedOut } = await runEgoScript(
+    const { combined, timedOut, aborted } = await runEgoScript(
       "scrape-jobs",
       code,
       Math.max(480_000, safeClickBudget * 28_000),
@@ -828,6 +866,15 @@ console.log("RESULT_JSON:" + JSON.stringify({
         },
       }
     );
+    if (aborted) {
+      onLog(`⏹️ 已手动停止抓取（已保留当前读到的 ${streamedJobs.length} 条岗位）。`, "warn");
+      return {
+        status: "ABORTED",
+        taskSpaceId: null,
+        jobs: streamedJobs,
+        stats: { scannedCards: 0, detailClicks: streamedJobs.length, skippedExisting: 0, skippedPreFilter: 0 },
+      };
+    }
     let res;
     try {
       res = parseMarkedJson(combined);

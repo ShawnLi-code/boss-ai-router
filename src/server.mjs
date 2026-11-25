@@ -57,6 +57,7 @@ import {
 } from "./updater.mjs";
 import { analyzeConversationAndSuggestReplies, generateContextualReplies } from "./reply-advisor.mjs";
 import {
+  abortActiveEgoTask,
   enrichJobDetailsAndCommuteViaEgo,
   fetchBossConversationMessages,
   fetchBossProfilePhone,
@@ -204,6 +205,8 @@ async function autoComputeCommuteForJobs(jobs = [], onLog = () => {}) {
 }
 
 let patrolRunning = false;
+let patrolAbortRequested = false;
+let dailyAutoSuppressedDate = "";
 
 function resolveBossFilterParams(settings = {}) {
   if (settings.boss_native_filter === "false") {
@@ -260,6 +263,7 @@ async function runDailyPatrol({
     throw new Error("每日巡检任务已在执行中，请等待当前队列完成");
   }
   patrolRunning = true;
+  patrolAbortRequested = false;
   const startedAt = new Date().toISOString();
   try {
     const settings = getSettings();
@@ -307,9 +311,11 @@ async function runDailyPatrol({
     const stepDetails = [];
 
     for (const pid of targetProfiles) {
+      if (patrolAbortRequested) break;
       touchedProfiles.push(pid);
       let profileClicks = 0;
       for (const kw of targetKeywords) {
+        if (patrolAbortRequested) break;
         stepIndex++;
         if (profileClicks >= MAX_PROFILE_CLICKS_PER_RUN) {
           logEvent(`🛡️ ${pid} 本轮详情点击已达 ${MAX_PROFILE_CLICKS_PER_RUN} 次风控上限，跳过「${kw}」保护账号`, "warn");
@@ -347,7 +353,7 @@ async function runDailyPatrol({
         profileClicks += stepClicks;
 
         const scrapedJobs = scrapeRes.jobs || [];
-        if (settings.auto_web_search !== "false" && scrapedJobs.length > 0) {
+        if (!patrolAbortRequested && scrapeRes.status !== "ABORTED" && settings.auto_web_search !== "false" && scrapedJobs.length > 0) {
           const needSearch = scrapedJobs
             .filter(
               (j) =>
@@ -411,6 +417,10 @@ async function runDailyPatrol({
           };
         }
 
+        if (patrolAbortRequested || scrapeRes.status === "ABORTED") {
+          break;
+        }
+
         if (stepIndex < totalSteps) {
           const pauseMs = stepClicks > 0
             ? (3600 + Math.floor(Math.random() * 2600))
@@ -418,6 +428,12 @@ async function runDailyPatrol({
           await new Promise((r) => setTimeout(r, pauseMs));
         }
       }
+    }
+
+    if (patrolAbortRequested) {
+      const abortSummary = `${new Date().toLocaleString("zh-CN", { hour12: false })} · 已手动停止巡检（保留本轮已扫到的 ${totalSaved} 条岗位）`;
+      logEvent(`⏹️ ${abortSummary}`, "warn");
+      return { status: "ABORTED", savedCount: totalSaved, newCount: totalNew, keptCount: totalKept, summary: abortSummary };
     }
 
     const summary = `${new Date().toLocaleString("zh-CN", { hour12: false })} · 完成 ${targetKeywords.length} 类岗位 × ${touchedProfiles.join("+")} 巡检，保存/更新 ${totalSaved} 条岗位`;
@@ -1779,6 +1795,16 @@ run().catch((e) => { window.__PDF_PNG_ERROR = String(e?.message || e); });
       return sendJson(res, 200, { ok: true, delivery: deliveryRes, state: buildStatePayload() });
     }
 
+    if (req.method === "POST" && pathname === "/api/tasks/cancel") {
+      patrolAbortRequested = true;
+      dailyAutoSuppressedDate = todayStr();
+      const resAbort = abortActiveEgoTask();
+      patrolRunning = false;
+      broadcast("patrol-progress", { done: true });
+      logEvent(resAbort.abortedLabel ? `⏹️ 已手动停止「${resAbort.abortedLabel}」并释放浏览器锁` : "⏹️ 已重置任务锁", "warn");
+      return sendJson(res, 200, { ok: true, aborted: resAbort, state: buildStatePayload() });
+    }
+
     const spaceFinishMatch = pathname.match(/^\/api\/ego\/spaces\/(\d+)\/finish$/);
     if (req.method === "POST" && spaceFinishMatch) {
       const result = await finishEgoSpace(Number(spaceFinishMatch[1]));
@@ -1808,7 +1834,7 @@ setInterval(() => {
     const settings = getSettings();
     if (settings.daily_check_enabled !== "true") return;
     const today = todayStr();
-    if (settings.last_daily_check_date === today) return;
+    if (settings.last_daily_check_date === today || dailyAutoSuppressedDate === today) return;
     if (patrolRunning || getActiveLock()) return;
     const targetHHMM = settings.daily_check_time || "09:30";
     const nowLocal = new Date();

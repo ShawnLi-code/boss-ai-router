@@ -778,6 +778,8 @@ html, body {
 .btn-secondary { background: var(--bg-subtle); color: var(--text-main); border-color: var(--border-line); }
 .btn-ghost { background: transparent; color: var(--text-muted); border-color: var(--border-line); }
 .btn-ghost:hover:not(:disabled) { color: var(--text-main); background: var(--bg-subtle); }
+.btn-danger { background: rgba(220, 38, 38, 0.12); color: var(--red-fg); border-color: rgba(220, 38, 38, 0.35); }
+.btn-danger:hover:not(:disabled) { background: rgba(220, 38, 38, 0.2); }
 
 input, select, textarea {
   width: 100%;
